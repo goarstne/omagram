@@ -1,13 +1,17 @@
 {
   "schemaVersion": 1,
-  "id": "local.omagram",
+  "id": "goarstne.omagram",
   "name": "Omagram",
   "version": "0.1.0",
-  "author": "Local",
+  "author": "Carsten (@goarstne)",
   "license": "MIT",
-  "description": "Launches the keyboard-first Telegram terminal client",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "description": "Keyboard-first Telegram terminal client (TUI) for Omarchy with live theme synchronization.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Omagram",
     "description": "Open the Omarchy Telegram terminal client",

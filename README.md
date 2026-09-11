@@ -89,17 +89,27 @@ uv run omagram
 
 ## 🎛️ Omarchy Bar Widget Integration
 
-Omagram ships with a native launcher widget for the Omarchy status bar:
+Omagram includes a native launcher widget for the Omarchy status bar.
 
+### Install via Omarchy CLI
 ```bash
-mkdir -p ~/.config/omarchy/plugins/local.omagram
-cp omarchy-plugin/* ~/.config/omarchy/plugins/local.omagram/
-omarchy plugin validate ~/.config/omarchy/plugins/local.omagram
-omarchy-shell shell rescanPlugins
-omarchy plugin enable local.omagram
+omarchy plugin add https://github.com/goarstne/omagram.git --enable
 ```
 
-Clicking the Telegram status icon spawns Omagram directly inside your terminal workspace.
+### Remove
+```bash
+omarchy plugin remove goarstne.omagram
+```
+
+### Manual / Local Development
+```bash
+git clone https://github.com/goarstne/omagram.git ~/.config/omarchy/plugins/goarstne.omagram
+omarchy plugin validate ~/.config/omarchy/plugins/goarstne.omagram
+omarchy-shell shell rescanPlugins
+omarchy plugin enable goarstne.omagram
+```
+
+Clicking the Telegram status icon (`󰗊`) in your Omarchy bar spawns Omagram directly inside your terminal workspace.
 
 ---
 

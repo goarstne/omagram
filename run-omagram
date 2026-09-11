@@ -1,0 +1,13 @@
+#!/bin/bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Error: 'uv' is required to run Omagram. Please install uv: https://docs.astral.sh/uv/" >&2
+  read -n 1 -s -r -p "Press any key to close..."
+  exit 1
+fi
+
+exec uv --directory "$DIR" run omagram run "$@"

@@ -2,17 +2,19 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Ui
-import qs.Commons
 
 BarWidget {
   id: root
-  moduleName: "local.omagram"
+  moduleName: "goarstne.omagram"
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  readonly property string launcherPath: decodeURIComponent(
+    String(Qt.resolvedUrl("run-omagram")).replace(/^file:\/\//, ""))
+
   Process {
     id: launcher
-    command: ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.omagram", "bash", "-lc", "cd \"$HOME/Projects/omagram\" && exec uv run omagram run"]
+    command: ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.omagram", root.launcherPath]
   }
 
   BarIconButton {
