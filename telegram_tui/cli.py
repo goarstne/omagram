@@ -34,14 +34,14 @@ def build_parser() -> argparse.ArgumentParser:
 async def setup_credentials() -> tuple[int, str]:
     install_asyncio_exception_logging(asyncio.get_running_loop())
     logger.info("setup started")
-    print("Omagram – einmalige Einrichtung\n")
-    print("Erstelle unter https://my.telegram.org → API development tools eine App.")
+    print("Omagram – one-time setup\n")
+    print("Create an application at https://my.telegram.org → API development tools.")
     api_id = input("API ID: ").strip()
-    api_hash = getpass.getpass("API Hash (wird nicht angezeigt): ").strip()
+    api_hash = getpass.getpass("API Hash (hidden): ").strip()
     if not api_id.isdigit() or not api_hash:
-        raise RuntimeError("API ID muss numerisch sein und API Hash darf nicht leer sein.")
+        raise RuntimeError("API ID must be numeric and API Hash cannot be empty.")
     save_config(api_id, api_hash)
-    print("Gespeichert in ~/.config/omagram/.env\n")
+    print("Saved to ~/.config/omagram/.env\n")
     return int(api_id), api_hash
 
 
@@ -50,10 +50,10 @@ def print_qr(url: str) -> None:
     qr.add_data(url)
     qr.make(fit=True)
     print("\033[2J\033[H")
-    print("Scanne diesen QR-Code in Telegram:")
-    print("Einstellungen → Geräte → Desktopgerät verknüpfen\n")
+    print("Scan this QR code in Telegram:")
+    print("Settings → Devices → Link Desktop Device\n")
     qr.print_ascii(invert=True)
-    print("\nDer QR-Code wird automatisch erneuert.")
+    print("\nThe QR code refreshes automatically.")
 
 
 async def perform_interactive_login(backend: TelegramBackend) -> None:
@@ -70,21 +70,21 @@ async def perform_interactive_login(backend: TelegramBackend) -> None:
             qr_login = await qr_login.recreate()
         except SessionPasswordNeededError:
             logger.info("2fa password requested")
-            password = getpass.getpass("2FA-Passwort: ")
+            password = getpass.getpass("2FA Password: ")
             await backend.client.sign_in(password=password)
             logger.info("2fa sign-in completed")
             break
         except Exception:
             logger.exception("qr login attempt failed")
-            choice = input("[q] QR erneut oder [p] Telefon-Code: ").strip().lower()
+            choice = input("[q] Retry QR or [p] Phone code: ").strip().lower()
             if choice != "p":
                 qr_login = await backend.client.qr_login()
                 continue
-            phone = input("Telefonnummer (+49…): ").strip()
+            phone = input("Phone number (+1... / +49...): ").strip()
             logger.info("phone-code login requested")
             await backend.send_code(phone)
-            code = input("Telegram-Code: ").strip()
-            password = getpass.getpass("2FA-Passwort (leer falls keines): ") or None
+            code = input("Telegram code: ").strip()
+            password = getpass.getpass("2FA Password (empty if none): ") or None
             await backend.sign_in(phone, code, password)
             logger.info("phone-code login completed")
             break
@@ -128,9 +128,11 @@ async def run_app(api_id: int, api_hash: str) -> None:
         if not authorized:
             if not sys.stdin.isatty():
                 raise RuntimeError(
-                    "Session ist nicht autorisiert. Bitte starte 'omagram auth' in einem interaktiven Terminal."
+                    "Session is not authorized. Please run 'omagram auth' in an interactive terminal."
                 )
             await perform_interactive_login(backend)
+
+        await TelegramTui(backend).run_async()
 
         await TelegramTui(backend).run_async()
     finally:

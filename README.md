@@ -1,16 +1,28 @@
-# omagram
+```text
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║  ██████    ██      ██    ██████      ██████    ████████      ██████    ██      ██  ║
+║██      ██  ████  ████  ██      ██  ██          ██      ██  ██      ██  ████  ████  ║
+║██      ██  ██  ██  ██  ██████████  ██  ██████  ████████    ██████████  ██  ██  ██  ║
+║██      ██  ██      ██  ██      ██  ██      ██  ██  ██      ██      ██  ██      ██  ║
+║  ██████    ██      ██  ██      ██    ██████    ██    ██    ██      ██  ██      ██  ║
+╠════════════════════════════════════════════════════════════════════════════════════╣
+║  SYSOP: @goarstne        NODE: 01        BAUD: 14400        STATUS: ONLINE         ║
+║  PROTOCOL: MTProto 2.0   GRAPHICS: SIXEL / ANSI-HALFCELL    OS: LINUX / OMARCHY    ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+```
 
-> Tastaturorientierter Telegram-Terminal-Client (TUI) für Omarchy und Linux mit nativer Sixel- und Halfcell-Medienvorschau.
+> **CONNECT 14400 / V.32bis · CARRIER DETECTED · WELCOME TO OMAGRAM BBS**  
+> A keyboard-first Telegram terminal client (TUI) with retro BBS aesthetics, native Sixel/Halfcell raster graphics, and zero-friction QR login for Omarchy & Linux.
 
 <p align="center">
-  <img src="screenshots/chat-view.svg" alt="omagram Terminal-Screenshot" width="100%">
+  <img src="screenshots/chat-view.png" alt="omagram Terminal Screenshot" width="100%">
 </p>
 
 ---
 
-## ⚡ TL;DR – In 30 Sekunden startklar
+## ⚡ TL;DR – Quick Dial-In (Connect in 30 Seconds)
 
-Kein Einrichten von API-Keys auf `my.telegram.org` nötig. Klonen, starten, QR-Code scannen:
+No API-key hassle. No registering developer apps on `my.telegram.org`. Just clone, run, and scan:
 
 ```bash
 git clone https://github.com/goarstne/omagram.git
@@ -18,63 +30,66 @@ cd omagram
 uv run omagram
 ```
 
-1. **QR-Code scannen:** Scan den angezeigten QR-Code in Telegram unter **Einstellungen → Geräte → Desktopgerät verknüpfen**.
-2. **Fertig:** Die TUI startet direkt nach dem Scan nahtlos in deine Chats!
+1. **Scan ASCII QR:** Open Telegram on your phone → **Settings → Devices → Link Desktop Device**.
+2. **Carrier Locked:** The TUI launches seamlessly right after the scan into your chat list!
 
 ---
 
-## ✨ Features
+## 📟 BBS Command Matrix (Keybindings)
 
-- ⌨️ **Keyboard-first Navigation:** Vim-inspirierte Navigation (`j`/`k`, `Enter`, `c` zum Schreiben, `Escape` zurück zur Liste).
-- 🖼️ **Native Terminal-Grafiken:** Bild- und GIF-Vorschauen via nativem Sixel (in Foot) oder Unicode-Halfcell-Fallback.
-- 🎬 **Lazy Medien-Wiedergabe:** Telegram-Videos und GIFs mit `v` direkt in `mpv` abspielen (GIFs automatisch in Endlosschleife).
-- 🔴 **YouTube-Integration:** Automatische Thumbnail-Erkennung von YouTube-Links mit direktem Abspielen über `v` in `mpv` (Fallback: Browser).
-- 💬 **Schneller Chat:** Chatverläufe und Dialoge werden flüssig im Hintergrund geladen; neue Nachrichten aktualisieren live.
-- 🎨 **Omarchy-Themes:** Automatische Übernahme der aktiven Omarchy-Farbpalette (`~/.local/state/omarchy/current/theme/colors.toml`).
-- 🔒 **100 % Privat & Sicher:** Direkte, Ende-zu-Ende verschlüsselte MTProto-Verbindung mit den Telegram-Servern. Keine Zwischenserver, keine Drittanbieter. Die Session liegt geschützt auf deinem Rechner (`~/.local/state/omagram/`).
-- 🧩 **Omarchy-Bar-Widget:** Schneller Start direkt aus der Statusleiste von `omarchy-shell`.
+```text
+[=== NAVIGATION & TRANSMISSION CONTROLS ===]
+```
 
----
-
-## ⌨️ Tastatur-Steuerung
-
-| Taste | Aktion |
+| Key | Action |
 | :--- | :--- |
-| `j` / `↓` | Nächster Chat / Cursor nach unten |
-| `k` / `↑` | Vorheriger Chat / Cursor nach oben |
-| `Enter` / `o` | Ausgewählten Chat öffnen |
-| `c` | Nachricht schreiben (Eingabefeld fokussieren) |
-| `Enter` (im Feld) | Nachricht absenden |
-| `Escape` | Eingabefeld verlassen / Fokus zurück auf Chatliste |
-| `v` | Neuestes Video/GIF oder YouTube-Link in `mpv` abspielen |
-| `b` / `Ctrl+b` | Chatleiste ein- / ausklappen |
-| `r` | Chats und Nachrichten neu laden |
-| `i` | Info-Dialog anzeigen |
-| `q` / `Ctrl+c` | Omagram beenden |
+| `j` / `↓` | Next dialog / Cursor down |
+| `k` / `↑` | Previous dialog / Cursor up |
+| `Enter` / `o` | Open selected chat channel |
+| `c` | Compose transmission (focus message composer) |
+| `Enter` *(in field)* | Transmit message |
+| `Escape` | Leave input / return focus to channel list |
+| `v` | Spawn `mpv` player for latest video, GIF, or YouTube link |
+| `b` / `Ctrl+b` | Toggle sidebar (channel list) visibility |
+| `r` | Reload channels and fetch fresh message packets |
+| `i` | Display BBS Node Info boot card |
+| `q` / `Ctrl+c` | Hang up / Exit Omagram |
 
 ---
 
-## 🚀 Installation & Voraussetzungen
+## 📡 System Specs & Features
 
-- **Python 3.11+** und [uv](https://docs.astral.sh/uv/) (empfohlen)
-- **mpv** (optional, für Video- und GIF-Wiedergabe): `sudo pacman -S mpv`
-- **Foot Terminal** (empfohlen für native Sixel-Bilder)
+- ⌨️ **Vim-Style Keyboard Transmission:** Lightning-fast navigation with zero mouse dependency.
+- 🖼️ **Native Terminal Graphics:** True pixel rendering in Foot terminal using native Sixel escapes, with automatic fallback to Unicode Halfcell rendering.
+- 📼 **Lazy AV Media Transceiver:** Stream Telegram video files and looping GIFs on demand with `v` via `mpv`.
+- 🔴 **YouTube Packet Interceptor:** Detects embedded YouTube URLs, displays thumbnail cards, and streams them instantly in `mpv` (or fallback browser).
+- 🎨 **Omarchy Theme Sync:** Reads active desktop theme palettes on the fly from `~/.local/state/omarchy/current/theme/colors.toml`.
+- 🔒 **Direct Encrypted MTProto Carrier:** Direct client-to-datacenter encrypted connection. No intermediate proxy servers, no third-party logging. Your session token remains strictly local in `~/.local/state/omagram/`.
+- 🎛️ **Omarchy Desktop Bar Integration:** Bundled single-click launcher widget for `omarchy-shell` / Quickshell.
+
+---
+
+## 💾 Dial-In Requirements & Installation
+
+- **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (recommended)
+- **mpv** (optional, for streaming video/GIF playback): `sudo pacman -S mpv`
+- **Foot Terminal** (recommended for hardware-accelerated Sixel raster graphics)
 
 ```bash
-# Repository klonen
+# Clone the repository
 git clone https://github.com/goarstne/omagram.git
 cd omagram
 
-# Abhängigkeiten synchronisieren und starten
+# Sync dependencies and connect
 uv sync
 uv run omagram
 ```
 
 ---
 
-## 🧩 Omarchy-Bar-Plugin aktivieren
+## 🎛️ Omarchy Bar Widget Integration
 
-Omagram bringt ein natives Widget für die Omarchy-Statusleiste mit:
+Omagram ships with a native launcher widget for the Omarchy status bar:
 
 ```bash
 mkdir -p ~/.config/omarchy/plugins/local.omagram
@@ -84,59 +99,58 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable local.omagram
 ```
 
-Ein Klick auf das Telegram-Icon in der Statusleiste öffnet Omagram im Terminal.
+Clicking the Telegram status icon spawns Omagram directly inside your preferred terminal workspace.
 
 ---
 
-## ⚙️ Konfiguration & Eigene API-Keys (Optional)
+## 🔧 SysOp Configuration (Optional Custom Keys)
 
-Standardmäßig nutzt Omagram die offiziellen, öffentlich bekannten Telegram-Desktop-Credentials (`api_id=2040`), damit keine manuelle Registrierung nötig ist. 
+By default, Omagram connects using the official, publicly available Telegram Desktop credentials (`api_id=2040`) so you never have to register manually.
 
-Wer für seinen Account lieber eigene App-Credentials von [my.telegram.org](https://my.telegram.org) verwenden möchte, kann diese jederzeit hinterlegen:
+If you are a SysOp who prefers using your own application credentials from [my.telegram.org](https://my.telegram.org):
 
-1. Datei anlegen: `~/.config/omagram/.env` (oder `.env` im Projektordner)
-2. Werte eintragen:
+1. Create `~/.config/omagram/.env` (or `.env` in the project root):
    ```env
    TG_API_ID=12345678
-   TG_API_HASH=dein_api_hash
+   TG_API_HASH=your_api_hash_here
    ```
-3. Alternativ den Einrichtungsassistenten starten:
+2. Or invoke the interactive setup wizard:
    ```bash
    uv run omagram setup
    ```
 
 ---
 
-## 🛠️ Diagnose & Debugging
+## 🔍 Line Diagnostics & Logs
 
-Omagram schreibt standardmäßig ein rotierendes Diagnose-Log nach `~/.local/state/omagram/omagram.log` (Zugangsdaten, Passwörter und Nachrichteninhalte werden niemals mitgeloggt).
+Omagram logs diagnostics to a rotating local logfile at `~/.local/state/omagram/omagram.log`. Passwords, private session keys, and message bodies are never recorded.
 
 ```bash
-# Debug-Modus starten
+# Launch with verbose debug diagnostics
 uv run omagram --debug run
 
-# Log live verfolgen
+# Monitor connection stream live
 tail -f ~/.local/state/omagram/omagram.log
 
-# Ausführliche Telethon-Netzwerk-Logs aktivieren
+# Enable detailed MTProto network traces
 OMAGRAM_LOG_TELETHON=1 uv run omagram --debug run
 ```
 
-### Tests & Tooling
+### Test Suite & Media Probes
 
 ```bash
-# Tests ausführen
+# Execute unit test suite
 uv run python -m unittest discover -s tests -v
 
-# Screenshot neu rendern (nutzt Mock-Daten, keine echten Chats)
+# Regenerate demo screenshot with simulated BBS data
 uv run python scripts/demo_screenshots.py
 
-# Offline-Sixel-Grafiktest im Terminal
-uv run python -m telegram_tui.media_probe /pfad/zum/bild.jpg
+# Offline Sixel terminal capability probe
+uv run python -m telegram_tui.media_probe /path/to/test_image.jpg
 ```
 
 ---
 
-## 📄 Lizenz
+## 📜 License
 
-MIT Lizenz.
+MIT License. Copyright (c) 2026 Carsten (@goarstne).

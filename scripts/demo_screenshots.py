@@ -11,6 +11,8 @@ changes with:
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -117,13 +119,12 @@ def _messages_for_dialog_one() -> list[Message]:
     ]
 
 
-async def _render() -> None:
-    SCREENSHOTS_DIR.mkdir(exist_ok=True)
+async def _shoot(size: tuple[int, int], name: str) -> None:
     dialogs = _dialogs()
     backend = _FakeBackend(dialogs, {1: _messages_for_dialog_one()})
     app = TelegramTui(backend)
 
-    async with app.run_test(size=(104, 40)) as pilot:
+    async with app.run_test(size=size) as pilot:
         await pilot.pause(0.3)
         await app._reload_dialogs()
         view = app.query_one("#dialogs")
@@ -135,8 +136,27 @@ async def _render() -> None:
         await pilot.pause(0.3)
 
         svg = app.export_screenshot(title="omagram — Telegram · Omarchy")
-        (SCREENSHOTS_DIR / "chat-view.svg").write_text(svg)
-        print(f"wrote {SCREENSHOTS_DIR / 'chat-view.svg'}")
+        svg_path = SCREENSHOTS_DIR / f"{name}.svg"
+        svg_path.write_text(svg)
+
+        rsvg_convert = shutil.which("rsvg-convert")
+        if rsvg_convert:
+            png_path = SCREENSHOTS_DIR / f"{name}.png"
+            width = "1400" if size[0] > 80 else "900"
+            subprocess.run(
+                [rsvg_convert, "-w", width, str(svg_path), "-o", str(png_path)],
+                check=True,
+            )
+            svg_path.unlink()
+            print(f"wrote {png_path}")
+        else:
+            print(f"wrote {svg_path} (install rsvg-convert to also get a .png)")
+
+
+async def _render() -> None:
+    SCREENSHOTS_DIR.mkdir(exist_ok=True)
+    await _shoot((104, 40), "chat-view")
+    await _shoot((64, 34), "chat-view-compact")
 
 
 if __name__ == "__main__":

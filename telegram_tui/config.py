@@ -26,7 +26,7 @@ def load_config() -> tuple[int, str]:
         try:
             api_id = int(raw_id)
         except ValueError as exc:
-            raise RuntimeError("TG_API_ID muss eine Zahl sein.") from exc
+            raise RuntimeError("TG_API_ID must be a numeric integer.") from exc
     else:
         api_id = DEFAULT_API_ID
         api_hash = DEFAULT_API_HASH

@@ -69,8 +69,8 @@ class TelegramBackend:
             device_model="PC 64bit",
             system_version="Linux",
             app_version="5.0.0",
-            lang_code="de",
-            system_lang_code="de",
+            lang_code="en",
+            system_lang_code="en",
             timeout=10,
             request_retries=3,
             connection_retries=2,
@@ -151,7 +151,7 @@ class TelegramBackend:
         except SessionPasswordNeededError as exc:
             logger.info("phone-code sign-in requires 2fa")
             if not password:
-                raise RuntimeError("Dieses Konto benötigt zusätzlich das 2FA-Passwort.") from exc
+                raise RuntimeError("This account additionally requires a 2FA password.") from exc
             await self.client.sign_in(password=password)
         except Exception:
             logger.exception("phone-code sign-in failed elapsed=%.3fs", time.perf_counter() - started)
