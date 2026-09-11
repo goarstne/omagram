@@ -6,13 +6,14 @@
 ║██      ██  ██      ██  ██      ██  ██      ██  ██  ██      ██      ██  ██      ██  ║
 ║  ██████    ██      ██  ██      ██    ██████    ██    ██    ██      ██  ██      ██  ║
 ╠════════════════════════════════════════════════════════════════════════════════════╣
-║  SYSOP: @goarstne        NODE: 01        BAUD: 14400        STATUS: ONLINE         ║
-║  PROTOCOL: MTProto 2.0   GRAPHICS: SIXEL / ANSI-HALFCELL    OS: LINUX / OMARCHY    ║
+║  PROD: omagram (v0.1.0)                                         AUTHOR: @goarstne  ║
+║  TYPE: Telegram TUI / Terminal Client               UI ENGINE: Textual + Telethon  ║
+║  GRAPHICS: Sixel + Unicode Halfcell                TARGET: Linux / Foot / Omarchy  ║
+║  REPO: github.com/goarstne/omagram                                   LICENSE: MIT  ║
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> **CONNECT 14400 / V.32bis · CARRIER DETECTED · WELCOME TO OMAGRAM BBS**  
-> A keyboard-first Telegram terminal client (TUI) with retro BBS aesthetics, native Sixel/Halfcell raster graphics, and zero-friction QR login for Omarchy & Linux.
+> **OMAGRAM** — A fast, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
 
 <p align="center">
   <img src="screenshots/chat-view.png" alt="omagram Terminal Screenshot" width="100%">
@@ -20,9 +21,13 @@
 
 ---
 
-## ⚡ TL;DR – Quick Dial-In (Connect in 30 Seconds)
+## ⚡ Quick Start & Core Highlights
 
-No API-key hassle. No registering developer apps on `my.telegram.org`. Just clone, run, and scan:
+- ⌨️ **Vim-Style Navigation:** Seamless keyboard workflow (`j`/`k` scroll, `Enter` open, `c` compose, `v` media, `Esc` back).
+- 🖼️ **Native Terminal Graphics:** True pixel image and GIF rendering via Sixel (Foot) with automatic Unicode Halfcell fallback.
+- 🎬 **Lazy AV Player:** Spawn `mpv` on demand for Telegram videos, looping GIFs, and YouTube links.
+- 🔒 **Instant QR Login:** Scan once with your Telegram mobile app — direct MTProto session, zero third-party servers.
+- 🎨 **Omarchy Theme Sync:** Automatically reads your active Omarchy desktop color palette in real-time.
 
 ```bash
 git clone https://github.com/goarstne/omagram.git
@@ -30,50 +35,46 @@ cd omagram
 uv run omagram
 ```
 
-1. **Scan ASCII QR:** Open Telegram on your phone → **Settings → Devices → Link Desktop Device**.
-2. **Carrier Locked:** The TUI launches seamlessly right after the scan into your chat list!
+1. **Scan QR:** Scan the terminal QR code in Telegram (**Settings → Devices → Link Desktop Device**).
+2. **Ready:** Launches directly into your chats!
 
 ---
 
-## 📟 BBS Command Matrix (Keybindings)
-
-```text
-[=== NAVIGATION & TRANSMISSION CONTROLS ===]
-```
+## ⌨️ Controls & Keybindings
 
 | Key | Action |
 | :--- | :--- |
-| `j` / `↓` | Next dialog / Cursor down |
-| `k` / `↑` | Previous dialog / Cursor up |
-| `Enter` / `o` | Open selected chat channel |
-| `c` | Compose transmission (focus message composer) |
-| `Enter` *(in field)* | Transmit message |
-| `Escape` | Leave input / return focus to channel list |
-| `v` | Spawn `mpv` player for latest video, GIF, or YouTube link |
-| `b` / `Ctrl+b` | Toggle sidebar (channel list) visibility |
-| `r` | Reload channels and fetch fresh message packets |
-| `i` | Display BBS Node Info boot card |
-| `q` / `Ctrl+c` | Hang up / Exit Omagram |
+| `j` / `↓` | Next chat / Cursor down |
+| `k` / `↑` | Previous chat / Cursor up |
+| `Enter` / `o` | Open selected chat |
+| `c` | Compose message (focus text input) |
+| `Enter` *(in input)* | Send message |
+| `Escape` | Unfocus input / return to chat list |
+| `v` | Play latest video, GIF, or YouTube link in `mpv` |
+| `b` / `Ctrl+b` | Toggle chat sidebar |
+| `r` | Reload chats and messages |
+| `i` | Show demoscene release credits card |
+| `q` / `Ctrl+c` | Exit Omagram |
 
 ---
 
-## 📡 System Specs & Features
+## 📡 Features & Architecture
 
-- ⌨️ **Vim-Style Keyboard Transmission:** Lightning-fast navigation with zero mouse dependency.
-- 🖼️ **Native Terminal Graphics:** True pixel rendering in Foot terminal using native Sixel escapes, with automatic fallback to Unicode Halfcell rendering.
-- 📼 **Lazy AV Media Transceiver:** Stream Telegram video files and looping GIFs on demand with `v` via `mpv`.
-- 🔴 **YouTube Packet Interceptor:** Detects embedded YouTube URLs, displays thumbnail cards, and streams them instantly in `mpv` (or fallback browser).
-- 🎨 **Omarchy Theme Sync:** Reads active desktop theme palettes on the fly from `~/.local/state/omarchy/current/theme/colors.toml`.
-- 🔒 **Direct Encrypted MTProto Carrier:** Direct client-to-datacenter encrypted connection. No intermediate proxy servers, no third-party logging. Your session token remains strictly local in `~/.local/state/omagram/`.
-- 🎛️ **Omarchy Desktop Bar Integration:** Bundled single-click launcher widget for `omarchy-shell` / Quickshell.
+- ⌨️ **Keyboard-Driven Workflow:** Designed from the ground up for power users with vim-like muscle memory.
+- 🖼️ **Native Sixel Raster Engine:** Pixel-perfect inline previews in Foot terminal without blocky character approximations.
+- 📼 **On-Demand Media Streaming:** Large videos and animations are downloaded only when requested and piped straight to `mpv`.
+- 🔴 **YouTube Link Preview:** Automatically extracts YouTube metadata and previews thumbnails directly in the chat history.
+- 🎨 **Dynamic Omarchy Theming:** Instant live synchronization with your system theme at `~/.local/state/omarchy/current/theme/colors.toml`.
+- 🔒 **Direct Encrypted MTProto:** Direct peer-to-server TLS connection to official Telegram datacenters. No proxy, no middlemen, no data collection. Session keys are stored locally at `~/.local/state/omagram/`.
+- 🎛️ **Omarchy Desktop Integration:** Includes an `omarchy-shell` / Quickshell status bar plugin.
 
 ---
 
-## 💾 Dial-In Requirements & Installation
+## 💾 Installation & Requirements
 
 - **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (recommended)
 - **mpv** (optional, for streaming video/GIF playback): `sudo pacman -S mpv`
-- **Foot Terminal** (recommended for hardware-accelerated Sixel raster graphics)
+- **Foot Terminal** (recommended for native Sixel raster graphics)
 
 ```bash
 # Clone the repository
@@ -99,15 +100,15 @@ omarchy-shell shell rescanPlugins
 omarchy plugin enable local.omagram
 ```
 
-Clicking the Telegram status icon spawns Omagram directly inside your preferred terminal workspace.
+Clicking the Telegram status icon spawns Omagram directly inside your terminal workspace.
 
 ---
 
-## 🔧 SysOp Configuration (Optional Custom Keys)
+## 🔧 Configuration & Custom API Keys (Optional)
 
-By default, Omagram connects using the official, publicly available Telegram Desktop credentials (`api_id=2040`) so you never have to register manually.
+Omagram connects using the official, publicly available Telegram Desktop credentials (`api_id=2040`) out-of-the-box.
 
-If you are a SysOp who prefers using your own application credentials from [my.telegram.org](https://my.telegram.org):
+If you prefer using your own custom developer credentials from [my.telegram.org](https://my.telegram.org):
 
 1. Create `~/.config/omagram/.env` (or `.env` in the project root):
    ```env
@@ -121,9 +122,9 @@ If you are a SysOp who prefers using your own application credentials from [my.t
 
 ---
 
-## 🔍 Line Diagnostics & Logs
+## 🔍 Diagnostics & Logs
 
-Omagram logs diagnostics to a rotating local logfile at `~/.local/state/omagram/omagram.log`. Passwords, private session keys, and message bodies are never recorded.
+Omagram logs diagnostics to a rotating local logfile at `~/.local/state/omagram/omagram.log`. Passwords, private session keys, and message contents are never recorded.
 
 ```bash
 # Launch with verbose debug diagnostics
@@ -142,7 +143,7 @@ OMAGRAM_LOG_TELETHON=1 uv run omagram --debug run
 # Execute unit test suite
 uv run python -m unittest discover -s tests -v
 
-# Regenerate demo screenshot with simulated BBS data
+# Regenerate demo screenshot with simulated data
 uv run python scripts/demo_screenshots.py
 
 # Offline Sixel terminal capability probe

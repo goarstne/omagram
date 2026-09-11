@@ -354,9 +354,9 @@ class InfoScreen(ModalScreen[None]):
         with Vertical(id="info-card"):
             yield Static(OMAGRAM_LOGO, id="info-logo", markup=False)
             yield Static(
-                "── terminal BBS for Telegram · running on Omarchy ──", id="info-tagline"
+                "── demoscene-grade Telegram TUI for Linux & Omarchy ──", id="info-tagline"
             )
-            yield Static(f"v{__version__} · CONNECT 14400 · NO CARRIER", id="info-meta")
+            yield Static(f"v{__version__} · code: @goarstne · github.com/goarstne/omagram", id="info-meta")
             yield Static("press any key to return", id="info-hint")
 
     def on_key(self, event: events.Key) -> None:
