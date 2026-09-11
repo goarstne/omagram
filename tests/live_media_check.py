@@ -10,7 +10,7 @@ import sys
 from telegram_tui.app import TelegramTui
 from telegram_tui.client import TelegramBackend
 from telegram_tui.config import SESSION_PATH, load_config
-from telegram_tui.logging_setup import configure_logging
+from telegram_tui.logging_config import configure_logging
 
 
 class LiveMediaCheck(TelegramTui):

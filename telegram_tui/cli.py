@@ -12,8 +12,10 @@ from telethon.errors import SessionPasswordNeededError
 from .app import TelegramTui
 from .client import TelegramBackend
 from .config import SESSION_PATH, load_config, save_config
-from .logging_setup import (
+from .logging_config import (
     configure_logging,
+    default_log_file,
+    enable_telethon_logging,
     install_asyncio_exception_logging,
     install_exception_logging,
 )

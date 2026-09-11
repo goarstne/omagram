@@ -25,8 +25,7 @@
 
 - 🎨 **Dynamic Theme Engine:** 100% theme-aware; seamlessly synchronizes with your active Omarchy desktop color palette (`colors.toml`) and terminal theme in real time.
 - ⌨️ **Vim-Style Navigation:** Seamless keyboard workflow (`j`/`k` scroll, `Enter` open, `c` compose, `v` media, `Esc` back).
-- 🖼️ **Native Terminal Graphics:** True pixel image and GIF rendering via Sixel (Foot) with automatic Unicode Halfcell fallback.
-- 🎬 **Lazy AV Player:** Spawn `mpv` on demand for Telegram video messages and looping GIFs.
+- 🖼️ **Native Terminal Graphics:** True pixel image and animation rendering with automatic Unicode Halfcell fallback.
 - 🔒 **Instant QR Login:** Scan once with your Telegram mobile app — direct MTProto session, zero third-party servers.
 
 ```bash
@@ -50,7 +49,7 @@ uv run omagram
 | `c` | Compose message (focus text input) |
 | `Enter` *(in input)* | Send message |
 | `Escape` | Unfocus input / return to chat list |
-| `v` | Play latest video or looping GIF in `mpv` |
+| `v` | Inspect latest image/animation |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
 | `r` | Reload chats and messages |
 | `i` | Show demoscene release credits card |
@@ -62,18 +61,16 @@ uv run omagram
 
 - 🎨 **Live Omarchy & Terminal Theming:** Automatically reads your desktop theme from `~/.local/state/omarchy/current/theme/colors.toml`. Custom palette colors adapt live across all widgets without restarting the client.
 - ⌨️ **Keyboard-Driven Workflow:** Designed from the ground up for power users with vim-like muscle memory.
-- 🖼️ **Native Sixel Raster Engine:** Pixel-perfect inline previews in Foot terminal without blocky character approximations.
-- 📼 **On-Demand Media Streaming:** Large videos and animations are downloaded only when requested and piped straight to `mpv`.
+- 🖼️ **Native Terminal Rendering:** Crisp inline previews with automatic Unicode Halfcell fallback.
 - 🔒 **Direct Encrypted MTProto:** Direct peer-to-server TLS connection to official Telegram datacenters. No proxy, no middlemen, no data collection. Session keys are stored locally at `~/.local/state/omagram/`.
-- 🎛️ **Omarchy Desktop Integration:** Includes an `omarchy-shell` / Quickshell status bar plugin.
+- 🎛️ **Omarchy Desktop Integration:** Includes an `omarchy-shell` / Quickshell status bar widget.
 
 ---
 
 ## 💾 Installation & Requirements
 
 - **Python 3.12+** and [uv](https://docs.astral.sh/uv/) (recommended)
-- **mpv** (optional, for streaming video/GIF playback): `sudo pacman -S mpv`
-- **Foot Terminal** (recommended for native Sixel raster graphics)
+- **Foot Terminal** (or any modern terminal emulator)
 
 ```bash
 # Clone the repository
@@ -155,7 +152,7 @@ uv run python -m unittest discover -s tests -v
 # Regenerate demo screenshot with simulated data
 uv run python scripts/demo_screenshots.py
 
-# Offline Sixel terminal capability probe
+# Offline terminal graphics capability probe
 uv run python -m telegram_tui.media_probe /path/to/test_image.jpg
 ```
 
