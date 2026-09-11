@@ -13,7 +13,7 @@
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> **OMAGRAM** — A fast, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
+> **OMAGRAM** — A fast, theme-aware, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
 
 <p align="center">
   <img src="screenshots/chat-view.png" alt="omagram Terminal Screenshot" width="100%">
@@ -23,11 +23,11 @@
 
 ## ⚡ Quick Start & Core Highlights
 
+- 🎨 **Dynamic Theme Engine:** 100% theme-aware; seamlessly synchronizes with your active Omarchy desktop color palette (`colors.toml`) and terminal theme in real time.
 - ⌨️ **Vim-Style Navigation:** Seamless keyboard workflow (`j`/`k` scroll, `Enter` open, `c` compose, `v` media, `Esc` back).
 - 🖼️ **Native Terminal Graphics:** True pixel image and GIF rendering via Sixel (Foot) with automatic Unicode Halfcell fallback.
-- 🎬 **Lazy AV Player:** Spawn `mpv` on demand for Telegram videos, looping GIFs, and YouTube links.
+- 🎬 **Lazy AV Player:** Spawn `mpv` on demand for Telegram video messages and looping GIFs.
 - 🔒 **Instant QR Login:** Scan once with your Telegram mobile app — direct MTProto session, zero third-party servers.
-- 🎨 **Omarchy Theme Sync:** Automatically reads your active Omarchy desktop color palette in real-time.
 
 ```bash
 git clone https://github.com/goarstne/omagram.git
@@ -50,7 +50,7 @@ uv run omagram
 | `c` | Compose message (focus text input) |
 | `Enter` *(in input)* | Send message |
 | `Escape` | Unfocus input / return to chat list |
-| `v` | Play latest video, GIF, or YouTube link in `mpv` |
+| `v` | Play latest video or looping GIF in `mpv` |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
 | `r` | Reload chats and messages |
 | `i` | Show demoscene release credits card |
@@ -60,11 +60,10 @@ uv run omagram
 
 ## 📡 Features & Architecture
 
+- 🎨 **Live Omarchy & Terminal Theming:** Automatically reads your desktop theme from `~/.local/state/omarchy/current/theme/colors.toml`. Custom palette colors adapt live across all widgets without restarting the client.
 - ⌨️ **Keyboard-Driven Workflow:** Designed from the ground up for power users with vim-like muscle memory.
 - 🖼️ **Native Sixel Raster Engine:** Pixel-perfect inline previews in Foot terminal without blocky character approximations.
 - 📼 **On-Demand Media Streaming:** Large videos and animations are downloaded only when requested and piped straight to `mpv`.
-- 🔴 **YouTube Link Preview:** Automatically extracts YouTube metadata and previews thumbnails directly in the chat history.
-- 🎨 **Dynamic Omarchy Theming:** Instant live synchronization with your system theme at `~/.local/state/omarchy/current/theme/colors.toml`.
 - 🔒 **Direct Encrypted MTProto:** Direct peer-to-server TLS connection to official Telegram datacenters. No proxy, no middlemen, no data collection. Session keys are stored locally at `~/.local/state/omagram/`.
 - 🎛️ **Omarchy Desktop Integration:** Includes an `omarchy-shell` / Quickshell status bar plugin.
 
@@ -106,7 +105,7 @@ Clicking the Telegram status icon spawns Omagram directly inside your terminal w
 
 ## 🔧 Configuration & Custom API Keys (Optional)
 
-Omagram connects using the official, publicly available Telegram Desktop credentials (`api_id=2040`) out-of-the-box.
+Omagram connects seamlessly out-of-the-box using standard desktop client credentials.
 
 If you prefer using your own custom developer credentials from [my.telegram.org](https://my.telegram.org):
 
