@@ -11,11 +11,9 @@ from telethon.errors import SessionPasswordNeededError
 
 from .app import TelegramTui
 from .client import TelegramBackend
-from .config import SESSION_PATH, load_config, save_config
+from .config import SESSION_PATH, load_config, save_config, validate_session_path
 from .logging_config import (
     configure_logging,
-    default_log_file,
-    enable_telethon_logging,
     install_asyncio_exception_logging,
     install_exception_logging,
 )
@@ -96,6 +94,7 @@ async def perform_interactive_login(backend: TelegramBackend) -> None:
 async def authenticate(api_id: int, api_hash: str) -> None:
     install_asyncio_exception_logging(asyncio.get_running_loop())
     logger.info("authentication started session=%s", SESSION_PATH)
+    validate_session_path(SESSION_PATH)
     backend = TelegramBackend(api_id, api_hash, str(SESSION_PATH))
     try:
         logger.info("auth connecting")
@@ -119,6 +118,7 @@ async def run_app(api_id: int, api_hash: str) -> None:
     """Connect before Textual starts; authenticate via QR if needed, then launch TUI."""
     install_asyncio_exception_logging(asyncio.get_running_loop())
     logger.info("run started session=%s", SESSION_PATH)
+    validate_session_path(SESSION_PATH)
     backend = TelegramBackend(api_id, api_hash, str(SESSION_PATH))
     try:
         logger.info("preflight connect started")

@@ -1,13 +1,49 @@
 #!/bin/bash
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# Build PATH from a fixed, trusted set of directories before running ANY
+# external command in this script (including "dirname" a few lines down) —
+# never from the PATH this script inherited. There is deliberately no
+# fallback appended to the inherited PATH: a directory a compromised shell rc
+# file, a dev-tool installer, or an unrelated running process prepended
+# ahead of the real system directories must not be able to shadow "uv" (or
+# "dirname"/"readlink"/"stat"/"id" below) with a look-alike binary. If uv
+# isn't in one of these directories, it is treated as not installed — see
+# the error message below for what to do instead. This is the sole PATH
+# uv (and anything it in turn runs, including omagram itself) will see.
+export PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.cargo/bin"
 
-if ! command -v uv >/dev/null 2>&1; then
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Reject a resolved binary that isn't owned by root or the invoking user, or
+# that is group/other-writable — i.e. something an unrelated party could have
+# planted or tampered with, even inside one of the trusted directories above.
+is_safe_executable() {
+  local resolved
+  resolved="$(readlink -f -- "$1")" || return 1
+  [ -f "$resolved" ] || return 1
+  [ -x "$resolved" ] || return 1
+  local owner perm group_digit other_digit
+  owner="$(stat -c '%u' -- "$resolved")" || return 1
+  perm="$(stat -c '%a' -- "$resolved")" || return 1
+  if [ "$owner" != "0" ] && [ "$owner" != "$(id -u)" ]; then
+    return 1
+  fi
+  group_digit="${perm: -2:1}"
+  other_digit="${perm: -1:1}"
+  if (( (group_digit & 2) != 0 || (other_digit & 2) != 0 )); then
+    return 1  # group- or other-writable
+  fi
+  return 0
+}
+
+# PATH above already contains only the trusted directories with no fallback,
+# so "command -v" here cannot resolve to anything outside them.
+UV_BIN="$(command -v uv 2>/dev/null || true)"
+if [ -z "$UV_BIN" ] || ! is_safe_executable "$UV_BIN"; then
   echo "Error: 'uv' is required to run Omagram. Please install uv: https://docs.astral.sh/uv/" >&2
   read -n 1 -s -r -p "Press any key to close..."
   exit 1
 fi
 
-exec uv --directory "$DIR" run omagram run "$@"
+exec "$UV_BIN" --directory "$DIR" run omagram run "$@"

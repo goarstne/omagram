@@ -14,7 +14,10 @@ BarWidget {
 
   Process {
     id: launcher
-    command: ["omarchy-launch-or-focus-tui", "--app-id=org.omarchy.omagram", root.launcherPath]
+    // Absolute path, not a bare command name: Quickshell's own PATH is
+    // outside this plugin's control, so resolving by name here would let
+    // anything earlier on that PATH shadow Omarchy's launcher script.
+    command: ["/usr/bin/omarchy-launch-or-focus-tui", "--app-id=org.omarchy.omagram", root.launcherPath]
   }
 
   BarIconButton {

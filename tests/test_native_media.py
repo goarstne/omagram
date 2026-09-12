@@ -55,7 +55,7 @@ class NativeMediaTests(unittest.IsolatedAsyncioTestCase):
                 Message("test", "", datetime.now(), False, youtube_url="https://youtu.be/example"),
                 Message("test", "", datetime.now(), False, media_kind="gif", source=source),
             ]
-            with patch("telegram_tui.app.shutil.which", return_value="/usr/bin/mpv"), patch("telegram_tui.app.subprocess.Popen") as launch:
+            with patch("telegram_tui.app.resolve_trusted_binary", return_value="/usr/bin/mpv"), patch("telegram_tui.app.subprocess.Popen") as launch:
                 await app.action_play_media()
                 await pilot.pause()
                 backend.cache_media_for_message.assert_awaited_once_with(1, source)

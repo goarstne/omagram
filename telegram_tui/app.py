@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 import subprocess
 import tomllib
 from pathlib import Path
@@ -25,6 +24,7 @@ from textual_image.renderable.tgp import Image as TGPImage
 from . import __version__
 from .client import Dialog, Message, TelegramBackend
 from .native_media import sixel_widget
+from .security import resolve_trusted_binary, safe_subprocess_env
 
 
 logger = logging.getLogger("omagram.ui")
@@ -858,13 +858,17 @@ class TelegramTui(App[None]):
         if not url:
             self._set_status("No playable YouTube link in this chat", error=True)
             return
-        player = shutil.which("mpv")
+        player = resolve_trusted_binary("mpv")
+        opener = player or resolve_trusted_binary("xdg-open")
+        if not opener:
+            self._set_status("No media player (mpv/xdg-open) found", error=True)
+            return
         try:
-            command = [player, "--force-window=yes"] if player else ["xdg-open"]
+            command = [opener, "--force-window=yes"] if player else [opener]
             if player and media.media_kind == "gif":
                 command.extend(["--loop-file=inf", "--no-audio"])
             command.append(url)
-            subprocess.Popen(command, start_new_session=True)
+            subprocess.Popen(command, start_new_session=True, env=safe_subprocess_env())
             self._set_status("Opening media…")
         except OSError as exc:
             self._set_status(f"Could not open media: {exc}", error=True)

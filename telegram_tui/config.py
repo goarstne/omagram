@@ -5,6 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .security import UnsafePathError, atomic_write_bytes, reject_symlink, secure_state_dir
+
 
 APP_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omagram"
 SESSION_PATH = Path(os.environ.get("TG_SESSION", APP_DIR / "telegram"))
@@ -30,14 +32,42 @@ def load_config() -> tuple[int, str]:
     else:
         api_id = DEFAULT_API_ID
         api_hash = DEFAULT_API_HASH
-    APP_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    secure_state_dir(APP_DIR)
     return api_id, api_hash
 
 
 def save_config(api_id: str, api_hash: str) -> None:
     """Persist only the Telegram app credentials with user-only permissions."""
-    APP_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
-    env_path = Path.home() / ".config/omagram/.env"
-    env_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    env_path.write_text(f"TG_API_ID={api_id.strip()}\nTG_API_HASH={api_hash.strip()}\n", encoding="utf-8")
-    env_path.chmod(0o600)
+    secure_state_dir(APP_DIR)
+    env_dir = Path.home() / ".config/omagram"
+    secure_state_dir(env_dir)
+    env_path = env_dir / ".env"
+    atomic_write_bytes(
+        env_path,
+        f"TG_API_ID={api_id.strip()}\nTG_API_HASH={api_hash.strip()}\n".encode("utf-8"),
+        mode=0o600,
+    )
+
+
+def validate_session_path(path: Path) -> Path:
+    """Ensure the Telethon session lives under a private, non-symlinked directory.
+
+    ``path`` may come from the ``TG_SESSION`` environment variable, so this
+    also guards against a tampered/attacker-controlled override pointing the
+    session file (which carries live Telegram auth) somewhere unsafe.
+    """
+    secure_state_dir(path.parent)
+    reject_symlink(path)
+    return path
+
+
+__all__ = [
+    "APP_DIR",
+    "SESSION_PATH",
+    "DEFAULT_API_ID",
+    "DEFAULT_API_HASH",
+    "load_config",
+    "save_config",
+    "validate_session_path",
+    "UnsafePathError",
+]
