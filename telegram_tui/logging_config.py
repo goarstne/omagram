@@ -8,7 +8,7 @@ from pathlib import Path
 import platform
 import sys
 
-from .security import reject_symlink, secure_state_dir
+from .security import UnsafePathError, open_verified_dir
 
 
 APP_STATE_DIR = Path(
@@ -19,24 +19,28 @@ LOGGER_NAME = "omagram"
 
 
 class SecureRotatingFileHandler(logging.handlers.RotatingFileHandler):
-    """A RotatingFileHandler that re-validates the path on every (re)open.
+    """A RotatingFileHandler that re-verifies directory identity on every (re)open.
 
     The base class reopens ``baseFilename`` with a plain ``open()`` call
-    after every rollover, with no symlink protection. A one-time check at
-    startup does not cover that: an attacker who replaces the log path with
-    a symlink sometime after startup — but before the next rotation — would
-    otherwise have writes silently redirected (or an unrelated file
-    truncated/appended to) the moment ``doRollover()`` reopens the stream.
+    after every rollover, re-resolving the path fresh each time with no
+    symlink protection. A one-time check at startup does not cover that: an
+    attacker who swaps the log directory (or plants a symlink at the log
+    path) sometime after startup — but before the next rotation — would
+    otherwise have writes silently redirected the moment ``doRollover()``
+    reopens the stream. Re-verifying via a dir_fd-relative open on every
+    call, and using that same fd for the actual stream (never falling
+    through to the base class's own path-based reopen), closes that window
+    instead of trusting a previous check to still hold.
     """
 
     def _open(self):
         path = Path(self.baseFilename)
-        secure_state_dir(path.parent)
-        reject_symlink(path)
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | nofollow, 0o600)
-        os.close(fd)
-        return super()._open()
+        with open_verified_dir(path.parent) as verified:
+            if verified.is_symlink(path.name):
+                raise UnsafePathError(f"refusing to follow symlinked log file: {path}")
+            flags = os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW
+            fd = os.open(path.name, flags, 0o600, dir_fd=verified.fd)
+        return os.fdopen(fd, self.mode, encoding=self.encoding)
 
 
 def configure_logging(
@@ -47,11 +51,12 @@ def configure_logging(
 ) -> Path:
     """Configure safe rotating diagnostics before any app code starts."""
     destination = Path(log_path or os.environ.get("OMAGRAM_LOG_FILE", DEFAULT_LOG_PATH))
-    # The directory is also (re-)validated inside SecureRotatingFileHandler
+    # The directory is also (re-)verified inside SecureRotatingFileHandler
     # on every open/rollover below; this early check just fails fast with a
     # clean stack before any logging machinery is touched.
-    secure_state_dir(destination.parent)
-    reject_symlink(destination)
+    with open_verified_dir(destination.parent) as verified:
+        if verified.is_symlink(destination.name):
+            raise UnsafePathError(f"refusing to log to a symlinked path: {destination}")
 
     requested_level = os.environ.get("OMAGRAM_LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
     level = getattr(logging, requested_level, logging.DEBUG if debug else logging.INFO)

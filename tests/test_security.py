@@ -10,6 +10,7 @@ from unittest.mock import patch
 from telegram_tui.security import (
     UnsafePathError,
     atomic_write_bytes,
+    open_verified_dir,
     reject_symlink,
     resolve_trusted_binary,
     safe_extension,
@@ -236,6 +237,122 @@ class SafeExtensionTests(unittest.TestCase):
 
     def test_rejects_overlong_extension(self):
         self.assertEqual(safe_extension("." + "a" * 20, fallback=".bin"), ".bin")
+
+
+class OpenVerifiedDirTests(unittest.TestCase):
+    """VerifiedDir/open_verified_dir: the dir_fd-anchored, TOCTOU-closed layer."""
+
+    def _open_fd_count(self) -> int:
+        return len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+    def test_creates_private_directory(self):
+        with tempfile.TemporaryDirectory() as base:
+            target = Path(base) / "nested" / "state"
+            with open_verified_dir(target) as verified:
+                self.assertTrue(target.is_dir())
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+                self.assertEqual(verified.path, target)
+
+    def test_intermediate_components_are_world_readable(self):
+        with tempfile.TemporaryDirectory() as base:
+            target = Path(base) / "nested" / "state"
+            open_verified_dir(target).close()
+            self.assertEqual(stat.S_IMODE((Path(base) / "nested").stat().st_mode), 0o755)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+
+    def test_rejects_symlinked_directory(self):
+        with tempfile.TemporaryDirectory() as base:
+            real_dir = Path(base) / "real"
+            real_dir.mkdir()
+            link = Path(base) / "link"
+            link.symlink_to(real_dir)
+            with self.assertRaises(UnsafePathError):
+                open_verified_dir(link)
+
+    def test_rejects_symlinked_ancestor_directory(self):
+        with tempfile.TemporaryDirectory() as base:
+            real_root = Path(base) / "real_root"
+            real_root.mkdir()
+            link_root = Path(base) / "link_root"
+            link_root.symlink_to(real_root)
+            with self.assertRaises(UnsafePathError):
+                open_verified_dir(link_root / "nested" / "state")
+            self.assertEqual(list(real_root.iterdir()), [])
+
+    def test_rejects_ancestor_owned_by_someone_else(self):
+        with tempfile.TemporaryDirectory() as base:
+            target = Path(base) / "nested" / "state"
+            with patch(
+                "telegram_tui.security.os.geteuid", return_value=os.geteuid() + 4321
+            ):
+                with self.assertRaises(UnsafePathError):
+                    open_verified_dir(target)
+
+    def test_subdir_creates_and_verifies_child(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                with root.subdir("child") as child:
+                    self.assertEqual(child.path, Path(base) / "root" / "child")
+                    self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o700)
+
+    def test_subdir_rejects_symlinked_child(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                outside = Path(base) / "outside"
+                outside.mkdir()
+                (Path(base) / "root" / "child").symlink_to(outside)
+                with self.assertRaises(UnsafePathError):
+                    root.subdir("child")
+
+    def test_subpath_does_not_leak_intermediate_fds(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                before = self._open_fd_count()
+                for _ in range(20):
+                    root.subpath("a", "b", "c").close()
+                after = self._open_fd_count()
+        self.assertEqual(before, after)
+
+    def test_write_atomic_writes_and_replaces(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                root.write_atomic("secret.env", b"first", mode=0o600)
+                self.assertEqual((Path(base) / "root" / "secret.env").read_bytes(), b"first")
+                root.write_atomic("secret.env", b"second", mode=0o600)
+                path = Path(base) / "root" / "secret.env"
+                self.assertEqual(path.read_bytes(), b"second")
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+                # No stray temp files left behind.
+                self.assertEqual(root.list_names(), ["secret.env"])
+
+    def test_write_atomic_refuses_existing_symlink(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                real_target = Path(base) / "elsewhere.txt"
+                real_target.write_text("do not touch")
+                (Path(base) / "root" / "secret.env").symlink_to(real_target)
+                with self.assertRaises(UnsafePathError):
+                    root.write_atomic("secret.env", b"pwned")
+                self.assertEqual(real_target.read_text(), "do not touch")
+
+    def test_list_names_and_remove(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                root.write_atomic("a.txt", b"x")
+                root.write_atomic("b.txt", b"y")
+                self.assertEqual(sorted(root.list_names()), ["a.txt", "b.txt"])
+                root.remove("a.txt")
+                self.assertEqual(root.list_names(), ["b.txt"])
+                root.remove("does-not-exist")  # must not raise
+
+    def test_open_binary_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as base:
+            with open_verified_dir(Path(base) / "root") as root:
+                real_target = Path(base) / "elsewhere.txt"
+                real_target.write_text("secret")
+                (Path(base) / "root" / "leak").symlink_to(real_target)
+                with self.assertRaises(OSError):
+                    root.open_binary("leak")
 
 
 if __name__ == "__main__":

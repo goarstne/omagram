@@ -21,10 +21,11 @@ from telethon.tl import types
 
 from .security import (
     MediaTooLargeError,
+    VerifiedDir,
+    open_verified_dir,
     resolve_trusted_binary,
     safe_extension,
     safe_subprocess_env,
-    secure_state_dir,
 )
 
 
@@ -93,7 +94,15 @@ class TelegramBackend:
             retry_delay=0.5,
         )
         cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        self.media_cache = secure_state_dir(cache_home / "omagram", mode=0o700) / "media"
+        # A dir_fd-anchored handle, not a Path: every cache operation below
+        # is performed relative to this fd (or one opened from it the same
+        # way), so a directory swapped out from under an already-verified
+        # path can't redirect cache reads/writes -- the kernel keeps
+        # resolving to the exact inode checked here. Held open for the
+        # process's lifetime; a single long-lived fd for an interactive TUI
+        # app is not a resource concern.
+        with open_verified_dir(cache_home / "omagram", mode=0o700) as app_cache:
+            self.media_cache: VerifiedDir = app_cache.subdir("media", mode=0o700)
         self.dialogs: list[Dialog] = []
         self.on_new_message: Callable[[int], Awaitable[None]] | None = None
         logger.info(
@@ -312,16 +321,24 @@ class TelegramBackend:
         return None
 
     @staticmethod
-    def _valid_image(path: Path) -> bool:
+    def _valid_image(target: VerifiedDir, name: str) -> bool:
+        """Validate ``name`` within ``target``, opened by dir_fd (not by path).
+
+        Re-opening by a freshly-joined path here would re-resolve ``name``
+        from scratch, giving up the identity guarantee ``target`` carries;
+        opening it relative to ``target.fd`` keeps validation pinned to the
+        exact file whose existence/size was already checked through the
+        same fd.
+        """
         try:
-            with Image.open(path) as image:
+            with target.open_binary(name) as handle, Image.open(handle) as image:
                 image.verify()
             return True
         except (FileNotFoundError, OSError, Image.UnidentifiedImageError):
             return False
 
     @classmethod
-    def _usable_gif_image(cls, path: Path) -> bool:
+    def _usable_gif_image(cls, target: VerifiedDir, name: str) -> bool:
         """Reject corrupt, degenerate, and effectively-black Telegram GIF frames.
 
         The size floor only guards against stub/placeholder images (e.g. a
@@ -329,14 +346,14 @@ class TelegramBackend:
         smaller than a typical video poster frame and is otherwise a
         perfectly usable preview once scaled for the terminal.
         """
-        if not cls._valid_image(path):
+        if not cls._valid_image(target, name):
             return False
         try:
-            with Image.open(path) as image:
+            with target.open_binary(name) as handle, Image.open(handle) as image:
                 if image.width < 24 or image.height < 24:
                     logger.debug(
-                        "gif frame rejected too small path=%s size=%sx%s",
-                        path, image.width, image.height,
+                        "gif frame rejected too small name=%s size=%sx%s",
+                        name, image.width, image.height,
                     )
                     return False
                 rgb = image.convert("RGB")
@@ -347,20 +364,13 @@ class TelegramBackend:
                 # actual animated document contains useful later frames.
                 if mean < 8 and maximum < 64:
                     logger.debug(
-                        "gif frame rejected too dark path=%s mean=%.1f max=%s",
-                        path, mean, maximum,
+                        "gif frame rejected too dark name=%s mean=%.1f max=%s",
+                        name, mean, maximum,
                     )
                     return False
                 return True
         except (FileNotFoundError, OSError, Image.UnidentifiedImageError):
             return False
-
-    @staticmethod
-    def _remove_file(path: Path) -> None:
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            logger.debug("could not remove incomplete media path=%s", path, exc_info=True)
 
     @staticmethod
     def _declared_size(item: object) -> int | None:
@@ -381,82 +391,101 @@ class TelegramBackend:
 
         return guard
 
+    @staticmethod
+    def _cached_names_for(target: VerifiedDir, message_id: int) -> list[str]:
+        """Names in ``target`` that look like a finished cache entry for ``message_id``.
+
+        Mirrors the old ``target.glob(f"{message_id}.*")`` intent: a literal
+        ``"<message_id>."`` prefix (not just any name containing the digits),
+        excluding hidden/temp files and empty ones.
+        """
+        prefix = f"{message_id}."
+        return [
+            name for name in target.list_names()
+            if name.startswith(prefix) and not name.startswith(".") and not name.endswith(".tmp")
+            and target.is_file(name) and target.size(name) > 0
+        ]
+
     async def _cache_media(self, dialog_id: int, item: object) -> Path | None:
         started = time.perf_counter()
-        target = secure_state_dir(self.media_cache / str(dialog_id))
         message_id = getattr(item, "id", None)
         if message_id is None:
             return None
-        media_kind = self._media_kind(item)
-        fallback_extension = ".mp4" if media_kind in {"gif", "video"} else ".jpg" if media_kind == "photo" else ""
-        extension = safe_extension(
-            getattr(getattr(item, "file", None), "ext", None), fallback=fallback_extension
-        )
-
-        declared_size = self._declared_size(item)
-        if declared_size is not None and declared_size > MAX_MEDIA_BYTES:
-            logger.warning(
-                "media download rejected: declared size exceeds cap dialog_id=%s message_id=%s size=%s cap=%s",
-                dialog_id, message_id, declared_size, MAX_MEDIA_BYTES,
+        with self.media_cache.subdir(str(dialog_id)) as target:
+            media_kind = self._media_kind(item)
+            fallback_extension = ".mp4" if media_kind in {"gif", "video"} else ".jpg" if media_kind == "photo" else ""
+            extension = safe_extension(
+                getattr(getattr(item, "file", None), "ext", None), fallback=fallback_extension
             )
-            return None
 
-        requested_path = target / f"{message_id}{extension}"
-        temp_path = target / f".{message_id}.tmp-{uuid.uuid4().hex}{extension}"
-        existing = requested_path if requested_path.is_file() else None
-        if existing and existing.is_file() and existing.stat().st_size > 0:
-            logger.debug("media cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, existing)
-            return existing
+            declared_size = self._declared_size(item)
+            if declared_size is not None and declared_size > MAX_MEDIA_BYTES:
+                logger.warning(
+                    "media download rejected: declared size exceeds cap dialog_id=%s message_id=%s size=%s cap=%s",
+                    dialog_id, message_id, declared_size, MAX_MEDIA_BYTES,
+                )
+                return None
 
-        cached_alternatives = [
-            p for p in target.glob(f"{message_id}.*")
-            if p.is_file() and not p.name.startswith(".") and not p.name.endswith(".tmp") and p.stat().st_size > 0
-        ]
-        if cached_alternatives:
-            logger.debug("media cache hit alternative dialog_id=%s message_id=%s path=%s", dialog_id, message_id, cached_alternatives[0])
-            return cached_alternatives[0]
+            requested_name = f"{message_id}{extension}"
+            temp_name = f".{message_id}.tmp-{uuid.uuid4().hex}{extension}"
+            has_existing = target.is_file(requested_name)
+            if has_existing and target.size(requested_name) > 0:
+                path = target.path / requested_name
+                logger.debug("media cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, path)
+                return path
 
-        if existing:
-            logger.warning("invalid media cache removed dialog_id=%s message_id=%s path=%s", dialog_id, message_id, existing)
-            self._remove_file(existing)
-        self._remove_file(temp_path)
-        try:
-            logger.info("media download started dialog_id=%s message_id=%s kind=%s", dialog_id, message_id, media_kind)
-            downloaded = await asyncio.wait_for(
-                self.client.download_media(
-                    item, file=str(temp_path), progress_callback=self._size_guard(MAX_MEDIA_BYTES)
-                ),
-                timeout=90,
-            )
-            path = Path(downloaded) if downloaded else None
-            valid = path if path and path.is_file() and path.stat().st_size > 0 else None
-            if valid:
-                path.replace(requested_path)
-                valid = requested_path
-            logger.info(
-                "media download completed dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
-                dialog_id,
-                message_id,
-                valid is not None,
-                valid.stat().st_size if valid else 0,
-                time.perf_counter() - started,
-            )
-            return valid
-        except asyncio.CancelledError:
-            logger.warning("media download cancelled dialog_id=%s message_id=%s", dialog_id, message_id)
-            raise
-        except MediaTooLargeError:
-            logger.warning(
-                "media download aborted: exceeded size cap dialog_id=%s message_id=%s cap=%s",
-                dialog_id, message_id, MAX_MEDIA_BYTES,
-            )
-            return None
-        except Exception:
-            # A failed preview must never make the whole chat unreadable.
-            logger.exception("media download failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
-            return None
-        finally:
-            self._remove_file(temp_path)
+            cached_alternatives = self._cached_names_for(target, message_id)
+            if cached_alternatives:
+                path = target.path / cached_alternatives[0]
+                logger.debug("media cache hit alternative dialog_id=%s message_id=%s path=%s", dialog_id, message_id, path)
+                return path
+
+            if has_existing:
+                logger.warning("invalid media cache removed dialog_id=%s message_id=%s path=%s", dialog_id, message_id, target.path / requested_name)
+                target.remove(requested_name)
+            target.remove(temp_name)
+            try:
+                logger.info("media download started dialog_id=%s message_id=%s kind=%s", dialog_id, message_id, media_kind)
+                # Telethon manages this file itself via its own path-based
+                # I/O, so it can't be handed our dir_fd directly; the random
+                # uuid4 component in temp_name makes the resulting brief
+                # plain-path window practically unracable. Everything around
+                # it -- the existence/size checks above, the publish-via-
+                # rename below, and cleanup -- stays fully dir_fd-anchored.
+                downloaded = await asyncio.wait_for(
+                    self.client.download_media(
+                        item, file=str(target.path / temp_name), progress_callback=self._size_guard(MAX_MEDIA_BYTES)
+                    ),
+                    timeout=90,
+                )
+                valid = bool(downloaded) and target.is_file(temp_name) and target.size(temp_name) > 0
+                final_size = target.size(temp_name) if valid else 0
+                if valid:
+                    target.replace(temp_name, requested_name)
+                logger.info(
+                    "media download completed dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
+                    dialog_id,
+                    message_id,
+                    valid,
+                    final_size,
+                    time.perf_counter() - started,
+                )
+                return target.path / requested_name if valid else None
+            except asyncio.CancelledError:
+                logger.warning("media download cancelled dialog_id=%s message_id=%s", dialog_id, message_id)
+                raise
+            except MediaTooLargeError:
+                logger.warning(
+                    "media download aborted: exceeded size cap dialog_id=%s message_id=%s cap=%s",
+                    dialog_id, message_id, MAX_MEDIA_BYTES,
+                )
+                return None
+            except Exception:
+                # A failed preview must never make the whole chat unreadable.
+                logger.exception("media download failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
+                return None
+            finally:
+                target.remove(temp_name)
 
     async def cache_media_for_message(self, dialog_id: int, item: object) -> Path | None:
         """Download a media message on demand, e.g. before opening it in mpv."""
@@ -466,69 +495,73 @@ class TelegramBackend:
         if self._media_kind(item) == "gif":
             return await self._cache_gif_thumbnail(dialog_id, item)
         started = time.perf_counter()
-        target = secure_state_dir(self.media_cache / str(dialog_id) / "thumbs")
         message_id = getattr(item, "id", None)
         if message_id is None:
             return None
-        requested_path = target / f"{message_id}.jpg"
-        temp_path = target / f".{message_id}.tmp-{uuid.uuid4().hex}.jpg"
-        existing = requested_path if requested_path.is_file() else None
-        is_video = self._media_kind(item) == "video"
-        valid_existing = (
-            self._usable_gif_image(existing)
-            if is_video and existing
-            else self._valid_image(existing)
-            if existing
-            else False
-        )
-        if existing and existing.is_file() and existing.stat().st_size > 0 and valid_existing:
-            logger.debug("thumbnail cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, existing)
-            return existing
-        if existing:
-            logger.warning("invalid thumbnail cache removed dialog_id=%s message_id=%s path=%s", dialog_id, message_id, existing)
-            self._remove_file(existing)
-        self._remove_file(temp_path)
-        try:
-            logger.info("thumbnail download started dialog_id=%s message_id=%s kind=%s", dialog_id, message_id, self._media_kind(item))
-            downloaded = await asyncio.wait_for(
-                self.client.download_media(
-                    item,
-                    file=str(temp_path),
-                    thumb=-1,
-                    progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
-                ),
-                timeout=25,
+        with self.media_cache.subpath(str(dialog_id), "thumbs") as target:
+            requested_name = f"{message_id}.jpg"
+            temp_stem = f".{message_id}.tmp-{uuid.uuid4().hex}"
+            temp_name = f"{temp_stem}.jpg"
+            temp_name_mp4 = f"{temp_stem}.mp4"
+            has_existing = target.is_file(requested_name)
+            is_video = self._media_kind(item) == "video"
+            valid_existing = (
+                self._usable_gif_image(target, requested_name)
+                if is_video and has_existing
+                else self._valid_image(target, requested_name)
+                if has_existing
+                else False
             )
-            path = Path(downloaded) if downloaded else None
-            valid = (
-                path
-                if path
-                and path.is_file()
-                and path.stat().st_size > 0
-                and (self._usable_gif_image(path) if is_video else self._valid_image(path))
-                else None
-            )
-            if valid:
-                path.replace(requested_path)
-                valid = requested_path
-            logger.info(
-                "thumbnail download completed dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
-                dialog_id,
-                message_id,
-                valid is not None,
-                valid.stat().st_size if valid else 0,
-                time.perf_counter() - started,
-            )
-            return valid
-        except asyncio.CancelledError:
-            logger.warning("thumbnail download cancelled dialog_id=%s message_id=%s", dialog_id, message_id)
-            raise
-        except Exception:
-            logger.exception("thumbnail download failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
-            return None
-        finally:
-            self._remove_file(temp_path)
-            self._remove_file(temp_path.with_suffix(".mp4"))
+            if has_existing and target.size(requested_name) > 0 and valid_existing:
+                path = target.path / requested_name
+                logger.debug("thumbnail cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, path)
+                return path
+            if has_existing:
+                logger.warning("invalid thumbnail cache removed dialog_id=%s message_id=%s path=%s", dialog_id, message_id, target.path / requested_name)
+                target.remove(requested_name)
+            target.remove(temp_name)
+            try:
+                logger.info("thumbnail download started dialog_id=%s message_id=%s kind=%s", dialog_id, message_id, self._media_kind(item))
+                # See _cache_media(): Telethon writes this file itself via a
+                # plain path, so the fd-anchored guarantee resumes right
+                # after -- the validity check and publish-via-rename below
+                # both go through target's dir_fd, not a fresh path lookup.
+                downloaded = await asyncio.wait_for(
+                    self.client.download_media(
+                        item,
+                        file=str(target.path / temp_name),
+                        thumb=-1,
+                        progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
+                    ),
+                    timeout=25,
+                )
+                valid = bool(
+                    downloaded
+                    and target.is_file(temp_name)
+                    and target.size(temp_name) > 0
+                    and (self._usable_gif_image(target, temp_name) if is_video else self._valid_image(target, temp_name))
+                )
+                final_size = target.size(temp_name) if valid else 0
+                if valid:
+                    target.replace(temp_name, requested_name)
+                logger.info(
+                    "thumbnail download completed dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
+                    dialog_id,
+                    message_id,
+                    valid,
+                    final_size,
+                    time.perf_counter() - started,
+                )
+                return target.path / requested_name if valid else None
+            except asyncio.CancelledError:
+                logger.warning("thumbnail download cancelled dialog_id=%s message_id=%s", dialog_id, message_id)
+                raise
+            except Exception:
+                logger.exception("thumbnail download failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
+                return None
+            finally:
+                target.remove(temp_name)
+                target.remove(temp_name_mp4)
 
     async def _cache_gif_thumbnail(self, dialog_id: int, item: object) -> Path | None:
         """Return a validated GIF preview without exposing partial downloads."""
@@ -536,139 +569,150 @@ class TelegramBackend:
         message_id = getattr(item, "id", None)
         if message_id is None:
             return None
-        target = secure_state_dir(self.media_cache / str(dialog_id) / "thumbs")
-        output = target / f"{message_id}.jpg"
-        temp_output = target / f".{message_id}.tmp-{uuid.uuid4().hex}.jpg"
-        fallback = target / f".{message_id}.fallback-{uuid.uuid4().hex}.jpg"
-        try:
-            if self._usable_gif_image(output):
-                logger.debug("gif thumbnail cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, output)
-                return output
-            self._remove_file(output)
-        except (FileNotFoundError, OSError, Image.UnidentifiedImageError):
-            self._remove_file(output)
+        with (
+            self.media_cache.subdir(str(dialog_id)) as media_dir,
+            media_dir.subdir("thumbs") as target,
+        ):
+            output_name = f"{message_id}.jpg"
+            temp_stem = f".{message_id}.tmp-{uuid.uuid4().hex}"
+            fallback_name = f".{message_id}.fallback-{uuid.uuid4().hex}.jpg"
 
-        # Never let an old interrupted transfer become the next render source.
-        self._remove_file(temp_output)
-        self._remove_file(fallback)
+            if self._usable_gif_image(target, output_name):
+                path = target.path / output_name
+                logger.debug("gif thumbnail cache hit dialog_id=%s message_id=%s path=%s", dialog_id, message_id, path)
+                return path
+            target.remove(output_name)
 
-        # Telegram's embedded GIF thumbnail is cheap and prevents a selected
-        # chat from showing only [gif] while the full MP4 is being fetched.
-        try:
-            logger.info("gif embedded thumbnail download started dialog_id=%s message_id=%s", dialog_id, message_id)
-            downloaded = await asyncio.wait_for(
-                self.client.download_media(
-                    item,
-                    file=str(fallback),
-                    thumb=-1,
-                    progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
-                ),
-                timeout=25,
-            )
-            candidate = Path(downloaded) if downloaded else None
-            if candidate and candidate.is_file() and self._usable_gif_image(candidate):
-                candidate.replace(output)
-                logger.info(
-                    "gif embedded thumbnail used dialog_id=%s message_id=%s bytes=%s elapsed=%.3fs",
-                    dialog_id, message_id, output.stat().st_size, time.perf_counter() - started,
-                )
-                return output
-            elif candidate and candidate.is_file():
-                logger.info(
-                    "gif embedded thumbnail rejected (unusable/black) dialog_id=%s message_id=%s bytes=%s",
-                    dialog_id, message_id, candidate.stat().st_size,
-                )
-                self._remove_file(candidate)
-        except asyncio.CancelledError:
-            self._remove_file(fallback)
-            raise
-        except (asyncio.TimeoutError, OSError) as exc:
-            logger.warning(
-                "gif embedded thumbnail timed out dialog_id=%s message_id=%s error=%s elapsed=%.3fs",
-                dialog_id, message_id, str(exc) or type(exc).__name__, time.perf_counter() - started,
-            )
-            self._remove_file(fallback)
-        except Exception:
-            self._remove_file(fallback)
-            logger.exception("gif embedded thumbnail failed dialog_id=%s message_id=%s", dialog_id, message_id)
-        finally:
-            self._remove_file(fallback)
+            # Never let an old interrupted transfer become the next render source.
+            target.remove(fallback_name)
 
-        # If embedded thumbnail was missing or black, check for a cached full video
-        # or download it if ffmpeg is available to extract a usable frame.
-        media_dir = self.media_cache / str(dialog_id)
-        cached_sources = sorted(
-            path
-            for path in media_dir.glob(f"{message_id}.*")
-            if path.is_file() and not path.name.startswith(".") and not path.name.endswith(".tmp") and path.stat().st_size > 0
-        )
-        source = cached_sources[0] if cached_sources else None
-        ffmpeg = resolve_trusted_binary("ffmpeg")
-
-        if not source and ffmpeg:
-            logger.info(
-                "gif embedded thumb unavailable or unusable, fetching media source dialog_id=%s message_id=%s",
-                dialog_id, message_id,
-            )
-            source = await self._cache_media(dialog_id, item)
-
-        if not source or not ffmpeg:
-            logger.warning(
-                "gif preview unavailable dialog_id=%s message_id=%s cached_source=%s ffmpeg=%s elapsed=%.3fs",
-                dialog_id, message_id, bool(source), bool(ffmpeg), time.perf_counter() - started,
-            )
-            return None
-
-        def extract() -> Path | None:
-            frame_prefix = temp_output.with_suffix("")
-            frame_pattern = Path(f"{frame_prefix}-%03d.jpg")
+            # Telegram's embedded GIF thumbnail is cheap and prevents a selected
+            # chat from showing only [gif] while the full MP4 is being fetched.
             try:
-                subprocess.run(
-                    [
-                        ffmpeg,
-                        "-hide_banner",
-                        "-loglevel", "error",
-                        "-y",
-                        "-i", str(source),
-                        "-vf", "fps=2,scale=trunc(min(960\\,iw)/2)*2:-2",
-                        "-frames:v", "12",
-                        str(frame_pattern),
-                    ],
-                    check=True,
-                    capture_output=True,
-                    timeout=15,
-                    env=safe_subprocess_env(),
+                logger.info("gif embedded thumbnail download started dialog_id=%s message_id=%s", dialog_id, message_id)
+                downloaded = await asyncio.wait_for(
+                    self.client.download_media(
+                        item,
+                        file=str(target.path / fallback_name),
+                        thumb=-1,
+                        progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
+                    ),
+                    timeout=25,
                 )
-                frames = sorted(target.glob(f"{frame_prefix.name}-*.jpg"))
-                for frame in frames:
-                    if self._usable_gif_image(frame):
-                        frame.replace(output)
-                        for leftover in frames:
-                            self._remove_file(leftover)
-                        return output
-                for frame in frames:
-                    self._remove_file(frame)
-                return None
-            except (OSError, subprocess.SubprocessError):
-                for frame in target.glob(f"{frame_prefix.name}-*.jpg"):
-                    self._remove_file(frame)
+                candidate_present = bool(downloaded) and target.is_file(fallback_name)
+                if candidate_present and self._usable_gif_image(target, fallback_name):
+                    target.replace(fallback_name, output_name)
+                    logger.info(
+                        "gif embedded thumbnail used dialog_id=%s message_id=%s bytes=%s elapsed=%.3fs",
+                        dialog_id, message_id, target.size(output_name), time.perf_counter() - started,
+                    )
+                    return target.path / output_name
+                elif candidate_present:
+                    logger.info(
+                        "gif embedded thumbnail rejected (unusable/black) dialog_id=%s message_id=%s bytes=%s",
+                        dialog_id, message_id, target.size(fallback_name),
+                    )
+                    target.remove(fallback_name)
+            except asyncio.CancelledError:
+                target.remove(fallback_name)
+                raise
+            except (asyncio.TimeoutError, OSError) as exc:
+                logger.warning(
+                    "gif embedded thumbnail timed out dialog_id=%s message_id=%s error=%s elapsed=%.3fs",
+                    dialog_id, message_id, str(exc) or type(exc).__name__, time.perf_counter() - started,
+                )
+                target.remove(fallback_name)
+            except Exception:
+                target.remove(fallback_name)
+                logger.exception("gif embedded thumbnail failed dialog_id=%s message_id=%s", dialog_id, message_id)
+            finally:
+                target.remove(fallback_name)
+
+            # If embedded thumbnail was missing or black, check for a cached full video
+            # or download it if ffmpeg is available to extract a usable frame.
+            cached_names = sorted(self._cached_names_for(media_dir, message_id))
+            source = media_dir.path / cached_names[0] if cached_names else None
+            ffmpeg = resolve_trusted_binary("ffmpeg")
+
+            if not source and ffmpeg:
+                logger.info(
+                    "gif embedded thumb unavailable or unusable, fetching media source dialog_id=%s message_id=%s",
+                    dialog_id, message_id,
+                )
+                source = await self._cache_media(dialog_id, item)
+
+            if not source or not ffmpeg:
+                logger.warning(
+                    "gif preview unavailable dialog_id=%s message_id=%s cached_source=%s ffmpeg=%s elapsed=%.3fs",
+                    dialog_id, message_id, bool(source), bool(ffmpeg), time.perf_counter() - started,
+                )
                 return None
 
-        result = await asyncio.to_thread(extract)
-        if result is None:
-            logger.warning("gif frame extraction failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
-        else:
-            logger.info(
-                "gif thumbnail extracted dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
-                dialog_id, message_id, bool(result), result.stat().st_size if result else 0,
-                time.perf_counter() - started,
+            def extract() -> bool:
+                # ffmpeg opens its output-frame pattern itself (a third-party
+                # process, not our own I/O), so it necessarily writes by
+                # plain path like Telethon's downloads above; the random
+                # uuid4 stem keeps that brief window unracable. Selecting,
+                # validating, publishing and cleaning up the resulting
+                # frames all go through target's dir_fd below.
+                frame_prefix_path = target.path / temp_stem
+                frame_pattern = Path(f"{frame_prefix_path}-%03d.jpg")
+                frame_prefix = f"{temp_stem}-"
+                try:
+                    subprocess.run(
+                        [
+                            ffmpeg,
+                            "-hide_banner",
+                            "-loglevel", "error",
+                            "-y",
+                            "-i", str(source),
+                            "-vf", "fps=2,scale=trunc(min(960\\,iw)/2)*2:-2",
+                            "-frames:v", "12",
+                            str(frame_pattern),
+                        ],
+                        check=True,
+                        capture_output=True,
+                        timeout=15,
+                        env=safe_subprocess_env(),
+                    )
+                    frame_names = sorted(
+                        name for name in target.list_names()
+                        if name.startswith(frame_prefix) and name.endswith(".jpg")
+                    )
+                    for name in frame_names:
+                        if self._usable_gif_image(target, name):
+                            target.replace(name, output_name)
+                            for leftover in frame_names:
+                                target.remove(leftover)
+                            return True
+                    for name in frame_names:
+                        target.remove(name)
+                    return False
+                except (OSError, subprocess.SubprocessError):
+                    for name in target.list_names():
+                        if name.startswith(frame_prefix) and name.endswith(".jpg"):
+                            target.remove(name)
+                    return False
+
+            extracted = await asyncio.to_thread(extract)
+            result = (
+                target.path / output_name
+                if extracted and target.is_file(output_name) and target.size(output_name) > 0
+                and self._usable_gif_image(target, output_name)
+                else None
             )
-        if result and (not result.is_file() or result.stat().st_size == 0 or not self._usable_gif_image(result)):
-            self._remove_file(result)
-            result = None
-        self._remove_file(temp_output)
-        self._remove_file(fallback)
-        return result
+            if extracted:
+                logger.info(
+                    "gif thumbnail extracted dialog_id=%s message_id=%s valid=%s bytes=%s elapsed=%.3fs",
+                    dialog_id, message_id, bool(result), target.size(output_name) if result else 0,
+                    time.perf_counter() - started,
+                )
+            else:
+                logger.warning("gif frame extraction failed dialog_id=%s message_id=%s elapsed=%.3fs", dialog_id, message_id, time.perf_counter() - started)
+            if extracted and result is None:
+                target.remove(output_name)
+            target.remove(fallback_name)
+            return result
 
     async def _cache_youtube_thumbnail(self, url: str) -> Path | None:
         started = time.perf_counter()
@@ -676,61 +720,66 @@ class TelegramBackend:
         if not match:
             return None
         video_id = match.group(1).split("&", 1)[0]
-        target = secure_state_dir(self.media_cache / "youtube")
-        path = target / f"{hashlib.sha256(video_id.encode()).hexdigest()[:20]}.jpg"
-        if path.is_file() and self._valid_image(path):
-            logger.debug("youtube thumbnail cache hit video_id=%s path=%s", video_id, path)
-            return path
-        temp_path = target / f".{path.name}.tmp-{uuid.uuid4().hex}.jpg"
+        with self.media_cache.subdir("youtube") as target:
+            name = f"{hashlib.sha256(video_id.encode()).hexdigest()[:20]}.jpg"
+            if target.is_file(name) and self._valid_image(target, name):
+                path = target.path / name
+                logger.debug("youtube thumbnail cache hit video_id=%s path=%s", video_id, path)
+                return path
+            temp_name = f".{name}.tmp-{uuid.uuid4().hex}"
 
-        thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+            thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
-        def download() -> Path | None:
-            try:
-                request = Request(thumbnail_url, headers={"User-Agent": "omagram/0.1"})
-                with urlopen(request, timeout=5) as response:
-                    declared_length = response.headers.get("Content-Length")
-                    if declared_length is not None:
-                        try:
-                            if int(declared_length) > MAX_YOUTUBE_THUMBNAIL_BYTES:
-                                logger.warning(
-                                    "youtube thumbnail rejected: declared length exceeds cap video_id=%s length=%s cap=%s",
-                                    video_id, declared_length, MAX_YOUTUBE_THUMBNAIL_BYTES,
-                                )
-                                return None
-                        except ValueError:
-                            pass
-                    written = 0
-                    with open(temp_path, "wb") as handle:
-                        while True:
-                            chunk = response.read(DOWNLOAD_CHUNK_BYTES)
-                            if not chunk:
-                                break
-                            written += len(chunk)
-                            if written > MAX_YOUTUBE_THUMBNAIL_BYTES:
-                                logger.warning(
-                                    "youtube thumbnail aborted: exceeded cap mid-transfer video_id=%s cap=%s",
-                                    video_id, MAX_YOUTUBE_THUMBNAIL_BYTES,
-                                )
-                                return None
-                            handle.write(chunk)
-                if self._valid_image(temp_path):
-                    temp_path.replace(path)
-                    return path
-                return None
-            except Exception:
-                return None
-            finally:
-                self._remove_file(temp_path)
+            def download() -> bool:
+                # Our own code end to end (unlike Telethon/ffmpeg elsewhere),
+                # so the write itself goes through target's dir_fd too, not
+                # just the surrounding checks.
+                try:
+                    request = Request(thumbnail_url, headers={"User-Agent": "omagram/0.1"})
+                    with urlopen(request, timeout=5) as response:
+                        declared_length = response.headers.get("Content-Length")
+                        if declared_length is not None:
+                            try:
+                                if int(declared_length) > MAX_YOUTUBE_THUMBNAIL_BYTES:
+                                    logger.warning(
+                                        "youtube thumbnail rejected: declared length exceeds cap video_id=%s length=%s cap=%s",
+                                        video_id, declared_length, MAX_YOUTUBE_THUMBNAIL_BYTES,
+                                    )
+                                    return False
+                            except ValueError:
+                                pass
+                        written = 0
+                        with os.fdopen(target.open_write_stream(temp_name), "wb") as handle:
+                            while True:
+                                chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                                if not chunk:
+                                    break
+                                written += len(chunk)
+                                if written > MAX_YOUTUBE_THUMBNAIL_BYTES:
+                                    logger.warning(
+                                        "youtube thumbnail aborted: exceeded cap mid-transfer video_id=%s cap=%s",
+                                        video_id, MAX_YOUTUBE_THUMBNAIL_BYTES,
+                                    )
+                                    return False
+                                handle.write(chunk)
+                    if self._valid_image(target, temp_name):
+                        target.replace(temp_name, name)
+                        return True
+                    return False
+                except Exception:
+                    return False
+                finally:
+                    target.remove(temp_name)
 
-        result = await asyncio.to_thread(download)
-        logger.info(
-            "youtube thumbnail completed video_id=%s valid=%s elapsed=%.3fs",
-            video_id,
-            result is not None,
-            time.perf_counter() - started,
-        )
-        return result
+            succeeded = await asyncio.to_thread(download)
+            result = target.path / name if succeeded else None
+            logger.info(
+                "youtube thumbnail completed video_id=%s valid=%s elapsed=%.3fs",
+                video_id,
+                result is not None,
+                time.perf_counter() - started,
+            )
+            return result
 
     async def send_message(self, dialog: Dialog, text: str) -> None:
         await self.client.send_message(dialog.entity, text)

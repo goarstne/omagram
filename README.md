@@ -64,6 +64,7 @@ uv run omagram
 - 🖼️ **Native Terminal Rendering:** Crisp inline previews with automatic Unicode Halfcell fallback.
 - 🔒 **Direct Encrypted MTProto:** Direct peer-to-server TLS connection to official Telegram datacenters. No proxy, no middlemen, no data collection. Session keys are stored locally at `~/.local/state/omagram/`.
 - 🎛️ **Omarchy Desktop Integration:** Includes an `omarchy-shell` / Quickshell status bar widget.
+- 🛡️ **Defense-in-Depth Hardening:** External binaries (`ffmpeg`) are resolved from a fixed trusted path list, never a bare `PATH` lookup; every state/cache/log directory is opened via `dir_fd`-anchored syscalls so a swapped directory can't redirect writes after the fact; downloads are capped both by declared size and mid-transfer.
 
 ---
 

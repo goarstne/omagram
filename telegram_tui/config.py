@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .security import UnsafePathError, atomic_write_bytes, reject_symlink, secure_state_dir
+from .security import UnsafePathError, open_verified_dir
 
 
 APP_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omagram"
@@ -32,21 +32,20 @@ def load_config() -> tuple[int, str]:
     else:
         api_id = DEFAULT_API_ID
         api_hash = DEFAULT_API_HASH
-    secure_state_dir(APP_DIR)
+    open_verified_dir(APP_DIR).close()
     return api_id, api_hash
 
 
 def save_config(api_id: str, api_hash: str) -> None:
     """Persist only the Telegram app credentials with user-only permissions."""
-    secure_state_dir(APP_DIR)
+    open_verified_dir(APP_DIR).close()
     env_dir = Path.home() / ".config/omagram"
-    secure_state_dir(env_dir)
-    env_path = env_dir / ".env"
-    atomic_write_bytes(
-        env_path,
-        f"TG_API_ID={api_id.strip()}\nTG_API_HASH={api_hash.strip()}\n".encode("utf-8"),
-        mode=0o600,
-    )
+    with open_verified_dir(env_dir) as verified:
+        verified.write_atomic(
+            ".env",
+            f"TG_API_ID={api_id.strip()}\nTG_API_HASH={api_hash.strip()}\n".encode("utf-8"),
+            mode=0o600,
+        )
 
 
 def validate_session_path(path: Path) -> Path:
@@ -54,10 +53,16 @@ def validate_session_path(path: Path) -> Path:
 
     ``path`` may come from the ``TG_SESSION`` environment variable, so this
     also guards against a tampered/attacker-controlled override pointing the
-    session file (which carries live Telegram auth) somewhere unsafe.
+    session file (which carries live Telegram auth) somewhere unsafe. The
+    parent directory is verified via a dir_fd-relative open (no re-resolving
+    the path string, no following a symlinked component); Telethon manages
+    the session file itself through its own sqlite3 connection by plain
+    path, so the fd-anchored guarantee necessarily stops at the directory,
+    with the session file itself rejected here if it is already a symlink.
     """
-    secure_state_dir(path.parent)
-    reject_symlink(path)
+    with open_verified_dir(path.parent) as verified:
+        if verified.is_symlink(path.name):
+            raise UnsafePathError(f"refusing to follow symlinked session file: {path}")
     return path
 
 
