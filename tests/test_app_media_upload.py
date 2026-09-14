@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from PIL import Image
 from rich.text import Text
 from textual.widgets import Button, Input, ListView, Select, Static
+from telethon.tl import types
 
 from telegram_tui.app import (
     ChatListView, DialogItem, GifScreen, MediaScreen, MessagePanel, TelegramTui,
@@ -54,7 +55,33 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             bindings = {(item.key, item.description) for item in app.query_one("Footer").walk_children()}
             self.assertIn(("g", "GIF"), bindings)
+            self.assertIn(("p", "Play"), bindings)
             self.assertIn(("s", "Send"), bindings)
+            self.assertNotIn(("ctrl+c", "Copy"), bindings)
+
+    async def test_chat_reload_preserves_hydrated_gif_previews(self):
+        api = backend()
+        source = SimpleNamespace(id=42)
+        replacement = Message("Alice", "[gif]", datetime.now(), False, media_kind="gif", source=source)
+        api.messages = AsyncMock(return_value=[replacement])
+        app = OfflineApp(api)
+        with TemporaryDirectory() as directory:
+            preview = Path(directory) / "already-rendered.jpg"
+            Image.new("RGB", (8, 8), "red").save(preview)
+            async with app.run_test() as pilot:
+                app.selected = api.dialogs[0]
+                app._current_messages = [
+                    Message("Alice", "[gif]", datetime.now(), False, media_kind="gif", media_path=preview, source=source)
+                ]
+                await app._load_messages(app.selected)
+                await pilot.pause()
+                self.assertEqual(app._current_messages[0].media_path, preview)
+
+    def test_raw_gif_labels_use_filename_or_video_metadata(self):
+        named = SimpleNamespace(attributes=[types.DocumentAttributeFilename("reaction.mp4")])
+        video = SimpleNamespace(attributes=[types.DocumentAttributeVideo(7, 320, 240, supports_streaming=True)])
+        self.assertEqual(GifScreen._label(named, 1), "01 · reaction.mp4")
+        self.assertEqual(GifScreen._label(video, 2), "02 · 320×240 · 7s")
 
     async def test_sidebar_cycles_chat_views(self):
         api = backend()

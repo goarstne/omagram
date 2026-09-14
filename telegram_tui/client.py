@@ -53,6 +53,10 @@ class Dialog:
     is_private: bool = False
     is_group: bool = False
     is_channel: bool = False
+    is_bot: bool = False
+    is_contact: bool = False
+    is_archived: bool = False
+    is_muted: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -254,6 +258,10 @@ class TelegramBackend:
                     is_private=dialog.is_user,
                     is_group=dialog.is_group,
                     is_channel=dialog.is_channel,
+                    is_bot=bool(getattr(dialog.entity, "bot", False)),
+                    is_contact=bool(getattr(dialog.entity, "contact", False)),
+                    is_archived=bool(getattr(dialog, "archived", False)),
+                    is_muted=self._dialog_is_muted(dialog),
                 )
                 async for dialog in self.client.iter_dialogs(limit=limit)
                 if dialog.is_user or dialog.is_group or dialog.is_channel
@@ -265,6 +273,16 @@ class TelegramBackend:
             logger.exception("dialog load failed limit=%s elapsed=%.3fs", limit, time.perf_counter() - started)
             raise
 
+    @staticmethod
+    def _dialog_is_muted(dialog: object) -> bool:
+        """True while a Telethon dialog's notify settings currently mute it."""
+        notify = getattr(getattr(dialog, "dialog", None), "notify_settings", None)
+        mute_until = getattr(notify, "mute_until", None)
+        if mute_until is None:
+            return False
+        now = datetime.now(mute_until.tzinfo) if mute_until.tzinfo else datetime.now()
+        return mute_until > now
+
     def _filter_dialogs(self, dialogs: list[Dialog], tab: str) -> list[Dialog]:
         if tab == "private":
             return [dialog for dialog in dialogs if dialog.is_private]
@@ -275,16 +293,31 @@ class TelegramBackend:
             return dialogs
         include = {utils.get_peer_id(peer) for peer in getattr(folder, "include_peers", [])}
         exclude = {utils.get_peer_id(peer) for peer in getattr(folder, "exclude_peers", [])}
+        category_flags = ("contacts", "non_contacts", "groups", "broadcasts", "bots")
+        has_inclusion_criteria = bool(include) or any(getattr(folder, flag, False) for flag in category_flags)
+
+        def matches_category(dialog: Dialog) -> bool:
+            non_contact_person = dialog.is_private and not dialog.is_contact and not dialog.is_bot
+            return (
+                (getattr(folder, "contacts", False) and dialog.is_contact)
+                or (getattr(folder, "non_contacts", False) and non_contact_person)
+                or (getattr(folder, "groups", False) and dialog.is_group)
+                or (getattr(folder, "broadcasts", False) and dialog.is_channel)
+                or (getattr(folder, "bots", False) and dialog.is_bot)
+            )
+
         filtered = []
         for dialog in dialogs:
             peer_id = utils.get_peer_id(dialog.entity)
-            if include and peer_id not in include:
-                continue
             if peer_id in exclude:
                 continue
-            if getattr(folder, "groups", False) and not dialog.is_group:
+            if has_inclusion_criteria and peer_id not in include and not matches_category(dialog):
                 continue
-            if getattr(folder, "broadcasts", False) and not dialog.is_channel:
+            if getattr(folder, "exclude_muted", False) and dialog.is_muted:
+                continue
+            if getattr(folder, "exclude_read", False) and dialog.unread == 0:
+                continue
+            if getattr(folder, "exclude_archived", False) and dialog.is_archived:
                 continue
             filtered.append(dialog)
         return filtered
@@ -651,13 +684,46 @@ class TelegramBackend:
                 target.remove(temp_name)
                 target.remove(temp_name_mp4)
 
+    @staticmethod
+    def _static_gif_thumb(item: object) -> object | None:
+        """Pick the largest *static* preview size for a GIF/animated document.
+
+        Telethon's own ``thumb=-1`` sorts a ``VideoSize`` entry (an actual
+        short animated preview clip Telegram sometimes attaches) ahead of
+        every ``PhotoSize``-family entry, regardless of byte size -- so for
+        documents that carry one, ``-1`` downloads unplayable-as-an-image
+        video bytes instead of a thumbnail. Selecting explicitly from the
+        static families avoids that entirely.
+        """
+        document = getattr(item, "document", item)
+        thumbs = getattr(document, "thumbs", None) or []
+        static = [
+            thumb for thumb in thumbs
+            if isinstance(thumb, (types.PhotoSize, types.PhotoSizeProgressive, types.PhotoStrippedSize))
+        ]
+        if not static:
+            return None
+
+        def size_of(thumb: object) -> int:
+            if isinstance(thumb, types.PhotoSizeProgressive):
+                return max(thumb.sizes, default=0)
+            if isinstance(thumb, types.PhotoStrippedSize):
+                return len(thumb.bytes)
+            return getattr(thumb, "size", 0)
+
+        # Pass the stable Telegram thumbnail type string. Telethon accepts
+        # this form across PhotoSize and PhotoSizeProgressive variants,
+        # whereas passing a progressive object directly is not supported by
+        # every installed Telethon release.
+        return getattr(max(static, key=size_of), "type", None)
+
     async def _cache_gif_thumbnail(
         self,
         dialog_id: int,
         item: object,
         *,
         allow_media_fallback: bool = True,
-        timeout: float = 25,
+        timeout: float = 8,
     ) -> Path | None:
         """Return a validated GIF preview without exposing partial downloads."""
         started = time.perf_counter()
@@ -681,47 +747,52 @@ class TelegramBackend:
             # Never let an old interrupted transfer become the next render source.
             target.remove(fallback_name)
 
-            # Telegram's embedded GIF thumbnail is cheap and prevents a selected
-            # chat from showing only [gif] while the full MP4 is being fetched.
-            try:
-                logger.info("gif embedded thumbnail download started dialog_id=%s message_id=%s", dialog_id, message_id)
-                downloaded = await asyncio.wait_for(
-                    self.client.download_media(
-                        item,
-                        file=str(target.path / fallback_name),
-                        thumb=-1,
-                        progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
-                    ),
-                    timeout=timeout,
-                )
-                candidate_present = bool(downloaded) and target.is_file(fallback_name)
-                if candidate_present and self._usable_gif_image(target, fallback_name):
-                    target.replace(fallback_name, output_name)
-                    logger.info(
-                        "gif embedded thumbnail used dialog_id=%s message_id=%s bytes=%s elapsed=%.3fs",
-                        dialog_id, message_id, target.size(output_name), time.perf_counter() - started,
+            # Telegram's embedded GIF thumbnail is cheap when a static photo
+            # size exists. If it does not, skip ``thumb=-1``: that value can
+            # select an MP4 VideoSize and leave the chat stuck on ``[gif]``.
+            static_thumb = self._static_gif_thumb(item)
+            if static_thumb is not None:
+                try:
+                    logger.info("gif embedded thumbnail download started dialog_id=%s message_id=%s", dialog_id, message_id)
+                    downloaded = await asyncio.wait_for(
+                        self.client.download_media(
+                            item,
+                            file=str(target.path / fallback_name),
+                            thumb=static_thumb,
+                            progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
+                        ),
+                        timeout=timeout,
                     )
-                    return target.path / output_name
-                elif candidate_present:
-                    logger.info(
-                        "gif embedded thumbnail rejected (unusable/black) dialog_id=%s message_id=%s bytes=%s",
-                        dialog_id, message_id, target.size(fallback_name),
+                    candidate_present = bool(downloaded) and target.is_file(fallback_name)
+                    if candidate_present and self._usable_gif_image(target, fallback_name):
+                        target.replace(fallback_name, output_name)
+                        logger.info(
+                            "gif embedded thumbnail used dialog_id=%s message_id=%s bytes=%s elapsed=%.3fs",
+                            dialog_id, message_id, target.size(output_name), time.perf_counter() - started,
+                        )
+                        return target.path / output_name
+                    elif candidate_present:
+                        logger.info(
+                            "gif embedded thumbnail rejected (unusable/black) dialog_id=%s message_id=%s bytes=%s",
+                            dialog_id, message_id, target.size(fallback_name),
+                        )
+                        target.remove(fallback_name)
+                except asyncio.CancelledError:
+                    target.remove(fallback_name)
+                    raise
+                except (asyncio.TimeoutError, OSError) as exc:
+                    logger.warning(
+                        "gif embedded thumbnail timed out dialog_id=%s message_id=%s error=%s elapsed=%.3fs",
+                        dialog_id, message_id, str(exc) or type(exc).__name__, time.perf_counter() - started,
                     )
                     target.remove(fallback_name)
-            except asyncio.CancelledError:
-                target.remove(fallback_name)
-                raise
-            except (asyncio.TimeoutError, OSError) as exc:
-                logger.warning(
-                    "gif embedded thumbnail timed out dialog_id=%s message_id=%s error=%s elapsed=%.3fs",
-                    dialog_id, message_id, str(exc) or type(exc).__name__, time.perf_counter() - started,
-                )
-                target.remove(fallback_name)
-            except Exception:
-                target.remove(fallback_name)
-                logger.exception("gif embedded thumbnail failed dialog_id=%s message_id=%s", dialog_id, message_id)
-            finally:
-                target.remove(fallback_name)
+                except Exception:
+                    target.remove(fallback_name)
+                    logger.exception("gif embedded thumbnail failed dialog_id=%s message_id=%s", dialog_id, message_id)
+                finally:
+                    target.remove(fallback_name)
+            else:
+                logger.info("gif has no static thumbnail; using full media frame dialog_id=%s message_id=%s", dialog_id, message_id)
 
             # Picker previews must stay responsive: do not queue a full MP4
             # download behind the shared media lock just to draw one frame.
@@ -895,13 +966,17 @@ class TelegramBackend:
         if not include_previews:
             return documents
 
+        # ponytail: small fixed cap, matches _hydrate_media's preview semaphore.
+        semaphore = asyncio.Semaphore(4)
+
         async def with_preview(document: object) -> RecentGif:
-            preview = await self._cache_gif_thumbnail(
-                "saved-gifs",
-                document,
-                allow_media_fallback=False,
-                timeout=3,
-            )
+            async with semaphore:
+                preview = await self._cache_gif_thumbnail(
+                    "saved-gifs",
+                    document,
+                    allow_media_fallback=False,
+                    timeout=3,
+                )
             name = (
                 getattr(document, "name", None)
                 or getattr(getattr(document, "file", None), "name", None)
@@ -939,14 +1014,18 @@ class TelegramBackend:
                 raise ValueError("File must be nonempty and at most 2 GiB")
             attributes = [types.DocumentAttributeFilename(path.name)]
             send_kwargs = {}
-            if path.suffix.lower() == ".gif":
+            is_gif = path.suffix.lower() == ".gif"
+            if is_gif:
                 # Telegram renders GIFs as looping animations only when the
-                # uploaded document carries this attribute.
+                # uploaded document carries this attribute *and* isn't forced
+                # to a plain document -- force_document=True (correct for
+                # every other file type, to keep bytes/name untouched) would
+                # make Telegram show it as a static file attachment instead.
                 attributes.append(types.DocumentAttributeAnimated())
                 send_kwargs["mime_type"] = "image/gif"
             await self.client.send_file(
                 dialog.entity, handle, file_size=info.st_size,
-                caption=caption, parse_mode=None, force_document=True,
+                caption=caption, parse_mode=None, force_document=not is_gif,
                 attributes=attributes,
                 progress_callback=progress_callback,
                 **send_kwargs,

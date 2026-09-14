@@ -19,7 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static, TextArea
+from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static
 from textual.widget import Widget
 from textual.worker import Worker, WorkerState
 from textual_image._terminal import CellSize, get_cell_size
@@ -28,6 +28,7 @@ from textual_image._terminal import CellSize, get_cell_size
 from . import __version__
 from .client import Dialog, DialogTab, Message, RecentGif, TelegramBackend
 from textual_image.widget import HalfcellImage as TerminalImage, TGPImage
+from telethon.tl import types
 
 from .native_media import fit_image_widget, sixel_widget
 from .security import resolve_trusted_binary, safe_subprocess_env
@@ -566,13 +567,25 @@ class GifScreen(ModalScreen[object | None]):
     def _label(gif: object, index: int) -> str:
         if isinstance(gif, RecentGif):
             return f"{index:02d} · {gif.name}"
-        name = (
-            getattr(gif, "name", None)
-            or getattr(getattr(gif, "file", None), "name", None)
-            or getattr(gif, "mime_type", None)
-            or "animated GIF"
+        attrs = getattr(gif, "attributes", ()) or ()
+        filename = next(
+            (getattr(attribute, "file_name", None) for attribute in attrs if getattr(attribute, "file_name", None)),
+            None,
         )
-        return f"{index:02d} · {name}"
+        video = next(
+            (
+                attribute for attribute in attrs
+                if isinstance(attribute, types.DocumentAttributeVideo)
+            ),
+            None,
+        )
+        if filename:
+            detail = filename
+        elif video:
+            detail = f"{video.w}×{video.h} · {video.duration}s"
+        else:
+            detail = f"{getattr(gif, 'size', 0) // 1024:,} KiB"
+        return f"{index:02d} · {detail}"
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="media-card"):
@@ -745,13 +758,13 @@ class TelegramTui(App[None]):
         Binding("c", "cycle_tab", "Folder", show=True),
         Binding("w", "compose", "Write", show=True),
         Binding("g", "gif", "GIF", show=True),
+        Binding("p", "play_media", "Play", show=True),
         Binding("v", "choose_media", "Media", show=True),
         Binding("s", "upload", "Send", show=True),
         Binding("t", "cycle_tab", "Next tab", show=True),
         Binding("b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
         Binding("escape", "focus_chats", "Chats", show=True),
-        Binding("ctrl+c", "copy_selection", "Copy", show=False),
         Binding("i", "show_info", "Info", show=False),
     ]
 
@@ -970,13 +983,6 @@ class TelegramTui(App[None]):
         # change event a no-op; reload explicitly for keyboard cycling.
         self.run_worker(self._reload_dialogs, group="dialog-tab", exclusive=True, exit_on_error=False)
 
-    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
-        selected = event.text_area.selected_text.strip()
-        if not selected or selected == getattr(self, "_last_copied_selection", ""):
-            return
-        self._last_copied_selection = selected
-        self._copy_to_clipboard(selected)
-
     def _copy_to_clipboard(self, text: str) -> None:
         try:
             copier = resolve_trusted_binary("wl-copy")
@@ -995,13 +1001,6 @@ class TelegramTui(App[None]):
 
     def action_show_info(self) -> None:
         self.push_screen(InfoScreen())
-
-    def action_copy_selection(self) -> None:
-        """Copy the focused Textual selection."""
-        selected = getattr(self.focused, "selected_text", "")
-        if not selected:
-            return
-        self._copy_to_clipboard(selected)
 
     def action_compose(self) -> None:
         if self.selected is None:
@@ -1093,6 +1092,19 @@ class TelegramTui(App[None]):
             if generation != self._chat_generation or self.selected not in (None, dialog):
                 logger.info("chat load discarded generation=%s dialog_id=%s", generation, dialog.id)
                 return
+            # A send/live update reloads the same message window. Keep already
+            # hydrated media visible while the replacement rows hydrate again;
+            # otherwise every GIF briefly regresses to its textual ``[gif]``
+            # placeholder after sending a GIF.
+            previous_media = {
+                getattr(message.source, "id", None): message.media_path
+                for message in self._current_messages
+                if getattr(message.source, "id", None) is not None and message.media_path
+            }
+            for message in messages:
+                message_id = getattr(message.source, "id", None)
+                if message_id in previous_media:
+                    message.media_path = previous_media[message_id]
             self._current_messages = messages
             self._render_messages(messages)
             logger.info("chat text rendered generation=%s dialog_id=%s messages=%s elapsed=%.3fs", generation, dialog.id, len(messages), asyncio.get_running_loop().time() - started)
