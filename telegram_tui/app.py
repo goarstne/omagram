@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import stat
 import subprocess
 import tomllib
@@ -36,6 +37,7 @@ CONNECT_TIMEOUT = 20
 AUTH_TIMEOUT = 10
 DIALOG_TIMEOUT = 20
 MEDIA_PREVIEW_TIMEOUT = 120
+URL_RE = re.compile(r"https?://[^\s<>\[\]\"']+", re.IGNORECASE)
 
 # Textual owns stdin once the app starts, so textual-image's interactive cell
 # size query can stall on the first render. Omarchy terminals use the standard
@@ -566,7 +568,7 @@ class TelegramTui(App[None]):
         Binding("r", "reload", "Reload", show=True),
         Binding("c", "compose", "Write", show=True),
         Binding("v", "choose_media", "Media", show=True),
-        Binding("ctrl+u", "upload", "Upload", show=True),
+        Binding("s", "upload", "Send file", show=True),
         Binding("b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
         Binding("escape", "focus_chats", "Chats", show=True),
@@ -1090,7 +1092,7 @@ class TelegramTui(App[None]):
         return f"[dim {self.palette['muted']}]── {label} ──[/]"
 
     def _format_message(self, message: Message, *, grouped: bool = False) -> str:
-        safe_text = escape(message.text)
+        safe_text = self._format_links(message.text)
         if grouped:
             # Same sender, same day, within a few minutes of the previous
             # line: drop the repeated time/sender header and show a
@@ -1113,6 +1115,25 @@ class TelegramTui(App[None]):
                 f"[dim {self.palette['muted']}]‹[/] "
                 f"[{self.palette['light_foreground']}]{safe_text}[/]"
             )
+
+    @staticmethod
+    def _format_links(text: str) -> str:
+        """Escape chat text while emitting terminal-clickable OSC 8 links."""
+        result: list[str] = []
+        cursor = 0
+        for match in URL_RE.finditer(text):
+            result.append(escape(text[cursor:match.start()]))
+            url = match.group(0)
+            trailing = ""
+            while url and url[-1] in ".,!?;:)":
+                trailing = url[-1] + trailing
+                url = url[:-1]
+            if url:
+                result.append(f'[link="{url}"]{escape(url)}[/link]')
+            result.append(escape(trailing))
+            cursor = match.end()
+        result.append(escape(text[cursor:]))
+        return "".join(result)
 
     def _set_status(self, text: str, error: bool = False) -> None:
         logger.debug("status update error=%s text=%s", error, text)

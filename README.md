@@ -52,7 +52,7 @@ uv run omagram
 | `Enter` *(in input)* | Send message |
 | `Escape` | Unfocus input / return to chat list |
 | `v` | Choose a photo, animation, video, document or YouTube link to open |
-| `Ctrl+u` | Upload a local file to the current chat |
+| `s` | Send a local file to the current chat |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
 | `r` | Reload chats and messages |
 | `i` | Show demoscene release credits card |
@@ -62,7 +62,7 @@ uv run omagram
 
 ## File uploads and media
 
-Press `Ctrl+u` in an open chat, enter a local path (`~` is supported), optionally
+Press `s` in an open chat, enter a local path (`~` is supported), optionally
 add a caption, then choose **Send**. The modal shows the fixed recipient and
 upload progress. Files are sent as documents: regular local files from 1 byte
 to 2 GiB, with captions up to 1024 UTF-16 units. Enter in a text field does not

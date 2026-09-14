@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from PIL import Image
+from rich.text import Text
 from textual.widgets import Button, Input, ListView, Static
 
 from telegram_tui.app import (
@@ -32,6 +33,13 @@ def backend():
 
 
 class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
+    def test_urls_are_emitted_as_clickable_links_and_punctuation_stays_plain(self):
+        formatted = TelegramTui._format_links("See https://example.com/a?q=1&x=2, then <ok>")
+        self.assertIn('[link="https://example.com/a?q=1&x=2"]https://example.com/a?q=1&x=2[/link],', formatted)
+        self.assertIn("<ok>", formatted)
+        rendered = Text.from_markup(formatted)
+        self.assertTrue(any(span.style == 'link "https://example.com/a?q=1&x=2"' for span in rendered.spans))
+
     async def test_upload_explicit_send_progress_chat_change_and_success(self):
         api = backend()
         started, finish = asyncio.Event(), asyncio.Event()
@@ -48,7 +56,7 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
             path.write_text('hi')
             async with app.run_test(size=(80, 28)) as pilot:
                 app.selected = api.dialogs[0]
-                await pilot.press('ctrl+u')
+                await pilot.press('s')
                 screen = app.screen
                 self.assertIsInstance(screen, UploadScreen)
                 screen.query_one('#upload-path', Input).value = str(path)
@@ -83,7 +91,7 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
                 app.action_upload()
                 self.assertNotIsInstance(app.screen, UploadScreen)
                 app.selected = api.dialogs[0]
-                await pilot.press('ctrl+u')
+                await pilot.press('s')
                 screen = app.screen
                 field = screen.query_one('#upload-path', Input)
                 caption = screen.query_one('#upload-caption', Input)
@@ -109,7 +117,7 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertEqual(api.send_file.await_count, 2)
                 self.assertNotIsInstance(app.screen, UploadScreen)
-                await pilot.press('ctrl+u', 'escape')
+                await pilot.press('s', 'escape')
                 self.assertNotIsInstance(app.screen, UploadScreen)
                 self.assertEqual(api.send_file.await_count, 2)
 
@@ -128,7 +136,7 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
             path.write_text('hi')
             async with app.run_test() as pilot:
                 app.selected = api.dialogs[0]
-                await pilot.press('ctrl+u')
+                await pilot.press('s')
                 screen = app.screen
                 screen.query_one('#upload-path', Input).value = str(path)
                 screen.query_one('#upload-caption', Input).value = 'draft'
@@ -161,7 +169,7 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
             path.write_text('hi')
             async with app.run_test() as pilot:
                 app.selected = api.dialogs[0]
-                await pilot.press('ctrl+u')
+                await pilot.press('s')
                 screen = app.screen
                 screen.query_one('#upload-path', Input).value = str(path)
                 await screen.on_button_pressed(Button.Pressed(screen.query_one('#upload-send', Button)))
