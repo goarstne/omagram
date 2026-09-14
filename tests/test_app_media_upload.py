@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 from rich.text import Text
-from textual.widgets import Button, Input, ListView, Static
+from textual.widgets import Button, Input, ListView, Select, Static
 
 from telegram_tui.app import (
     ChatListView, DialogItem, MediaScreen, MessagePanel, TelegramTui,
@@ -33,6 +33,17 @@ def backend():
 
 
 class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sidebar_cycles_chat_views(self):
+        api = backend()
+        app = OfflineApp(api)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(app.query_one("#dialog-tabs", Select).value, "all")
+            app.action_cycle_tab()
+            self.assertEqual(app.query_one("#dialog-tabs", Select).value, "private")
+            app.action_cycle_tab()
+            self.assertEqual(app.query_one("#dialog-tabs", Select).value, "groups")
+
     def test_urls_are_emitted_as_clickable_links_and_punctuation_stays_plain(self):
         formatted = TelegramTui._format_links("See https://example.com/a?q=1&x=2, then <ok>")
         self.assertIn('[link="https://example.com/a?q=1&x=2"]https://example.com/a?q=1&x=2[/link],', formatted)

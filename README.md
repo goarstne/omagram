@@ -53,6 +53,7 @@ uv run omagram
 | `Escape` | Unfocus input / return to chat list |
 | `v` | Choose a photo, animation, video, document or YouTube link to open |
 | `s` | Send a local file to the current chat |
+| `t` | Cycle Chats, Private, Groups and your Telegram folders |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
 | `r` | Reload chats and messages |
 | `i` | Show demoscene release credits card |

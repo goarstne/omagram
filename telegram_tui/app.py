@@ -17,14 +17,14 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static
 from textual.widget import Widget
 from textual.worker import Worker, WorkerState
 from textual_image._terminal import CellSize, get_cell_size
 # Unicode is the fallback; Foot uses native Sixel widgets below.
 
 from . import __version__
-from .client import Dialog, Message, TelegramBackend
+from .client import Dialog, DialogTab, Message, TelegramBackend
 from textual_image.widget import HalfcellImage as TerminalImage, TGPImage
 
 from .native_media import fit_image_widget, sixel_widget
@@ -158,6 +158,12 @@ def build_css(p: dict[str, str]) -> str:
         background: {p["dark_background"]};
         color: {p["light_foreground"]};
         text-style: bold;
+        border-bottom: double {p["selection"]};
+    }}
+
+    #dialog-tabs {{
+        width: 100%;
+        height: 2;
         border-bottom: double {p["selection"]};
     }}
 
@@ -600,6 +606,7 @@ class TelegramTui(App[None]):
         Binding("c", "compose", "Write", show=True),
         Binding("v", "choose_media", "Media", show=True),
         Binding("s", "upload", "Send file", show=True),
+        Binding("t", "cycle_tab", "Next tab", show=True),
         Binding("b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
         Binding("escape", "focus_chats", "Chats", show=True),
@@ -620,6 +627,8 @@ class TelegramTui(App[None]):
         self._sending = False
         self._dialogs_lock = asyncio.Lock()
         self._theme_signature: tuple[int, int] | None = None
+        self._dialog_tabs: list[DialogTab] = list(getattr(backend, "dialog_tabs", []))
+        self._active_tab = "all"
 
     def get_css_variables(self) -> dict[str, str]:
         variables = super().get_css_variables()
@@ -630,7 +639,10 @@ class TelegramTui(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
             with Vertical(id="sidebar"):
-                yield Label("‹ CHATS ›", id="sidebar-title")
+                yield Select(
+                    [("Chats", "all"), ("Private", "private"), ("Groups", "groups")],
+                    value="all", allow_blank=False, id="dialog-tabs"
+                )
                 yield ChatListView(id="dialogs")
             with Vertical(id="chat"):
                 yield Static("[dim]Select a chat · j/k to navigate · Enter to open[/dim]", id="chat-title")
@@ -651,6 +663,7 @@ class TelegramTui(App[None]):
             os.environ.get("OMAGRAM_IMAGE_MODE", "auto"),
         )
         self.backend.on_new_message = self._message_event
+        self._set_tab_options(self._dialog_tabs)
         self.query_one("#messages", MessagePanel).write("[dim]Connecting to Telegram…[/dim]")
         self._theme_signature = self._current_theme_signature()
         self.set_interval(1.0, self._watch_theme)
@@ -672,7 +685,7 @@ class TelegramTui(App[None]):
         self.palette = load_theme_palette()
         self.CSS = build_css(self.palette)
         self.refresh_css()
-        self.query_one("#sidebar-title", Label).update("‹ CHATS ›")
+        self._set_tab_options(self._dialog_tabs)
         if self.selected:
             self._update_chat_title(self.selected)
             self.run_worker(self._load_messages(self.selected), exclusive=True)
@@ -694,6 +707,8 @@ class TelegramTui(App[None]):
                 self._set_status("Not authorized. Run: omagram auth", error=True)
                 return
             logger.info("connect worker: session authorized")
+            if hasattr(self.backend, "load_dialog_tabs"):
+                self._set_tab_options(await self.backend.load_dialog_tabs())
             await asyncio.wait_for(self._reload_dialogs(), timeout=DIALOG_TIMEOUT)
             logger.info("connect worker: dialogs rendered count=%s", len(self.backend.dialogs))
             self._set_status("Online · j/k navigate · Enter open · c write")
@@ -715,7 +730,10 @@ class TelegramTui(App[None]):
             started = asyncio.get_running_loop().time()
             logger.info("ui dialog reload started backend_count=%s", len(self.backend.dialogs))
             view = self.query_one("#dialogs", ChatListView)
-            dialogs = list(await self.backend.load_dialogs())
+            try:
+                dialogs = list(await self.backend.load_dialogs(tab=self._active_tab))
+            except TypeError:
+                dialogs = list(await self.backend.load_dialogs())
             highlighted = view.highlighted_child
             keep_id = highlighted.dialog.id if isinstance(highlighted, DialogItem) else (
                 self.selected.id if self.selected else None
@@ -741,13 +759,9 @@ class TelegramTui(App[None]):
             if view.children:
                 view.index = next((i for i, dialog in enumerate(dialogs) if dialog.id == keep_id), 0)
 
-            title_widget = self.query_one("#sidebar-title", Label)
-            if total_unread:
-                title_widget.update(
-                    f"‹ CHATS ›  [bold {self.palette['accent']}]● {total_unread} UNREAD[/]"
-                )
-            else:
-                title_widget.update(f"‹ CHATS ›  [dim {self.palette['muted']}]{len(dialogs)}[/]")
+            self.query_one("#dialog-tabs", Select).tooltip = (
+                f"{total_unread} unread" if total_unread else f"{len(dialogs)} chats"
+            )
             logger.info("ui dialog reload completed count=%s elapsed=%.3fs", len(dialogs), asyncio.get_running_loop().time() - started)
 
     async def action_reload(self) -> None:
@@ -774,6 +788,34 @@ class TelegramTui(App[None]):
 
     def action_focus_chats(self) -> None:
         self.query_one("#dialogs", ChatListView).focus()
+
+    def _set_tab_options(self, tabs: list[DialogTab]) -> None:
+        if not tabs:
+            tabs = [
+                DialogTab("all", "Chats", "all"),
+                DialogTab("private", "Private", "private"),
+                DialogTab("groups", "Groups", "groups"),
+            ]
+        self._dialog_tabs = tabs
+        select = self.query_one("#dialog-tabs", Select)
+        select.set_options([(tab.title, tab.key) for tab in tabs])
+        select.value = self._active_tab if any(tab.key == self._active_tab for tab in tabs) else tabs[0].key
+
+    async def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "dialog-tabs" or event.value == Select.BLANK:
+            return
+        if str(event.value) == self._active_tab:
+            return
+        self._active_tab = str(event.value)
+        self.run_worker(self._reload_dialogs(), group="dialog-tab", exclusive=True, exit_on_error=False)
+
+    def action_cycle_tab(self) -> None:
+        keys = [tab.key for tab in self._dialog_tabs]
+        if not keys:
+            return
+        index = keys.index(self._active_tab) if self._active_tab in keys else -1
+        self._active_tab = keys[(index + 1) % len(keys)]
+        self.query_one("#dialog-tabs", Select).value = self._active_tab
 
     def action_show_info(self) -> None:
         self.push_screen(InfoScreen())

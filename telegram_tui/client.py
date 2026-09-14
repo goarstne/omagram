@@ -18,7 +18,8 @@ import uuid
 from PIL import Image, ImageStat
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
-from telethon.tl import types
+from telethon.tl import functions, types
+from telethon import utils
 
 from .security import (
     MediaTooLargeError,
@@ -49,6 +50,17 @@ class Dialog:
     entity: object
     preview: str = ""
     preview_date: datetime | None = None
+    is_private: bool = False
+    is_group: bool = False
+    is_channel: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class DialogTab:
+    key: str
+    title: str
+    kind: str
+    filter: object | None = None
 
 
 @dataclass(slots=True)
@@ -105,6 +117,12 @@ class TelegramBackend:
         with open_verified_dir(cache_home / "omagram", mode=0o700) as app_cache:
             self.media_cache: VerifiedDir = app_cache.subdir("media", mode=0o700)
         self.dialogs: list[Dialog] = []
+        self.dialog_tabs: list[DialogTab] = [
+            DialogTab("all", "Chats", "all"),
+            DialogTab("private", "Private", "private"),
+            DialogTab("groups", "Groups", "groups"),
+        ]
+        self._custom_filters: dict[str, object] = {}
         self._media_download_lock = asyncio.Lock()
         self.on_new_message: Callable[[int], Awaitable[None]] | None = None
         logger.info(
@@ -186,11 +204,36 @@ class TelegramBackend:
             raise
         logger.info("phone-code sign-in completed elapsed=%.3fs", time.perf_counter() - started)
 
-    async def load_dialogs(self, limit: int = 60) -> list[Dialog]:
+    async def load_dialog_tabs(self) -> list[DialogTab]:
+        """Return built-in views plus the user's Telegram chat folders."""
+        tabs = [
+            DialogTab("all", "Chats", "all"),
+            DialogTab("private", "Private", "private"),
+            DialogTab("groups", "Groups", "groups"),
+        ]
+        try:
+            filters = await self.client(functions.messages.GetDialogFiltersRequest())
+        except Exception:
+            logger.exception("dialog folder load failed")
+            self.dialog_tabs = tabs
+            self._custom_filters = {}
+            return tabs
+        self._custom_filters = {}
+        for item in filters:
+            if not isinstance(item, (types.DialogFilter, types.DialogFilterChatlist)):
+                continue
+            title = getattr(getattr(item, "title", None), "text", None) or str(getattr(item, "title", "Folder"))
+            key = f"folder:{item.id}"
+            tabs.append(DialogTab(key, title, "folder", item))
+            self._custom_filters[key] = item
+        self.dialog_tabs = tabs
+        return tabs
+
+    async def load_dialogs(self, limit: int = 60, tab: str = "all") -> list[Dialog]:
         started = time.perf_counter()
         logger.info("dialog load started limit=%s connected=%s", limit, self.client.is_connected())
         try:
-            self.dialogs = [
+            loaded = [
                 Dialog(
                     id=dialog.id,
                     title=dialog.name or "(ohne Titel)",
@@ -198,15 +241,43 @@ class TelegramBackend:
                     entity=dialog.entity,
                     preview=(dialog.message.message if dialog.message else "") or ("[media]" if dialog.message and dialog.message.media else ""),
                     preview_date=dialog.message.date if dialog.message else None,
+                    is_private=dialog.is_user,
+                    is_group=dialog.is_group,
+                    is_channel=dialog.is_channel,
                 )
                 async for dialog in self.client.iter_dialogs(limit=limit)
                 if dialog.is_user or dialog.is_group or dialog.is_channel
             ]
+            self.dialogs = self._filter_dialogs(loaded, tab)
             logger.info("dialog load completed count=%s elapsed=%.3fs", len(self.dialogs), time.perf_counter() - started)
             return self.dialogs
         except Exception:
             logger.exception("dialog load failed limit=%s elapsed=%.3fs", limit, time.perf_counter() - started)
             raise
+
+    def _filter_dialogs(self, dialogs: list[Dialog], tab: str) -> list[Dialog]:
+        if tab == "private":
+            return [dialog for dialog in dialogs if dialog.is_private]
+        if tab == "groups":
+            return [dialog for dialog in dialogs if dialog.is_group]
+        folder = getattr(self, "_custom_filters", {}).get(tab)
+        if folder is None:
+            return dialogs
+        include = {utils.get_peer_id(peer) for peer in getattr(folder, "include_peers", [])}
+        exclude = {utils.get_peer_id(peer) for peer in getattr(folder, "exclude_peers", [])}
+        filtered = []
+        for dialog in dialogs:
+            peer_id = utils.get_peer_id(dialog.entity)
+            if include and peer_id not in include:
+                continue
+            if peer_id in exclude:
+                continue
+            if getattr(folder, "groups", False) and not dialog.is_group:
+                continue
+            if getattr(folder, "broadcasts", False) and not dialog.is_channel:
+                continue
+            filtered.append(dialog)
+        return filtered
 
     async def messages(self, dialog: Dialog, limit: int = 80) -> list[Message]:
         started = time.perf_counter()
