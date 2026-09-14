@@ -78,6 +78,13 @@ class Message:
     source: object | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class RecentGif:
+    document: object
+    preview: Path | None
+    name: str
+
+
 YOUTUBE_RE = re.compile(
     r"https?://(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/)[\w-]+|youtu\.be/[\w-]+)(?:\S*)?",
     re.IGNORECASE,
@@ -219,7 +226,10 @@ class TelegramBackend:
             self._custom_filters = {}
             return tabs
         self._custom_filters = {}
-        for item in filters:
+        # Telethon returns DialogFilters(filters=[...]); older test doubles
+        # and versions may return the list directly.
+        items = getattr(filters, "filters", filters)
+        for item in items:
             if not isinstance(item, (types.DialogFilter, types.DialogFilterChatlist)):
                 continue
             title = getattr(getattr(item, "title", None), "text", None) or str(getattr(item, "title", "Folder"))
@@ -641,7 +651,14 @@ class TelegramBackend:
                 target.remove(temp_name)
                 target.remove(temp_name_mp4)
 
-    async def _cache_gif_thumbnail(self, dialog_id: int, item: object) -> Path | None:
+    async def _cache_gif_thumbnail(
+        self,
+        dialog_id: int,
+        item: object,
+        *,
+        allow_media_fallback: bool = True,
+        timeout: float = 25,
+    ) -> Path | None:
         """Return a validated GIF preview without exposing partial downloads."""
         started = time.perf_counter()
         message_id = getattr(item, "id", None)
@@ -675,7 +692,7 @@ class TelegramBackend:
                         thumb=-1,
                         progress_callback=self._size_guard(MAX_THUMBNAIL_BYTES),
                     ),
-                    timeout=25,
+                    timeout=timeout,
                 )
                 candidate_present = bool(downloaded) and target.is_file(fallback_name)
                 if candidate_present and self._usable_gif_image(target, fallback_name):
@@ -705,6 +722,15 @@ class TelegramBackend:
                 logger.exception("gif embedded thumbnail failed dialog_id=%s message_id=%s", dialog_id, message_id)
             finally:
                 target.remove(fallback_name)
+
+            # Picker previews must stay responsive: do not queue a full MP4
+            # download behind the shared media lock just to draw one frame.
+            if not allow_media_fallback:
+                logger.info(
+                    "gif preview unavailable without media fallback dialog_id=%s message_id=%s elapsed=%.3fs",
+                    dialog_id, message_id, time.perf_counter() - started,
+                )
+                return None
 
             # If embedded thumbnail was missing or black, check for a cached full video
             # or download it if ffmpeg is available to extract a usable frame.
@@ -862,6 +888,41 @@ class TelegramBackend:
     async def send_message(self, dialog: Dialog, text: str) -> None:
         await self.client.send_message(dialog.entity, text)
 
+    async def recent_gifs(self, limit: int = 24, include_previews: bool = False) -> list[object]:
+        """Return Telegram's native recently used/saved GIF documents."""
+        result = await self.client(functions.messages.GetSavedGifsRequest(hash=0))
+        documents = list(getattr(result, "gifs", ()))[:limit]
+        if not include_previews:
+            return documents
+
+        async def with_preview(document: object) -> RecentGif:
+            preview = await self._cache_gif_thumbnail(
+                "saved-gifs",
+                document,
+                allow_media_fallback=False,
+                timeout=3,
+            )
+            name = (
+                getattr(document, "name", None)
+                or getattr(getattr(document, "file", None), "name", None)
+                or "animated GIF"
+            )
+            return RecentGif(document, preview, name)
+
+        return list(await asyncio.gather(*(with_preview(document) for document in documents)))
+
+    async def send_gif(self, dialog: Dialog, gif: object, caption: str = "") -> None:
+        """Send a Telegram GIF document through the native animated-media path."""
+        gif = getattr(gif, "document", gif)
+        await self.client.send_file(
+            dialog.entity,
+            gif,
+            caption=caption,
+            parse_mode=None,
+            force_document=False,
+            nosound_video=False,
+        )
+
     async def send_file(
         self, dialog: Dialog, path: Path, caption: str = "", progress_callback=None
     ) -> None:
@@ -876,9 +937,17 @@ class TelegramBackend:
                 raise ValueError("Select a regular file")
             if not 0 < info.st_size <= MAX_MEDIA_BYTES:
                 raise ValueError("File must be nonempty and at most 2 GiB")
+            attributes = [types.DocumentAttributeFilename(path.name)]
+            send_kwargs = {}
+            if path.suffix.lower() == ".gif":
+                # Telegram renders GIFs as looping animations only when the
+                # uploaded document carries this attribute.
+                attributes.append(types.DocumentAttributeAnimated())
+                send_kwargs["mime_type"] = "image/gif"
             await self.client.send_file(
                 dialog.entity, handle, file_size=info.st_size,
                 caption=caption, parse_mode=None, force_document=True,
-                attributes=[types.DocumentAttributeFilename(path.name)],
+                attributes=attributes,
                 progress_callback=progress_callback,
+                **send_kwargs,
             )

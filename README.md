@@ -13,7 +13,7 @@
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-[![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/main/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)
+[![Omarchy App](https://raw.githubusercontent.com/tcballard/omarchy-badges/main/badges/v1/omarchy-app.svg)](https://github.com/tcballard/omarchy-badges)
 
 > **OMAGRAM** — A fast, theme-aware, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
 
@@ -29,6 +29,11 @@
 - ⌨️ **Vim-Style Navigation:** Seamless keyboard workflow (`j`/`k` scroll, `Enter` open, `c` compose, `v` media, `Esc` back).
 - 🖼️ **Native Terminal Graphics:** True pixel image and animation rendering with automatic Unicode Halfcell fallback.
 - 🔒 **Instant QR Login:** Scan once with your Telegram mobile app — direct MTProto session, zero third-party servers.
+
+> **Current status:** GIF support is intentionally rudimentary for now: recent
+> Telegram GIFs can be previewed and sent, while chat playback uses `mpv`.
+> Recent work also improves file sending, media previews, keyboard shortcuts,
+> and Omarchy launcher/menu integration.
 
 ```bash
 git clone https://github.com/goarstne/omagram.git
@@ -52,6 +57,7 @@ uv run omagram
 | `Enter` *(in input)* | Send message |
 | `Escape` | Unfocus input / return to chat list |
 | `v` | Choose a photo, animation, video, document or YouTube link to open |
+| `g` | Open recent GIFs and send the selected one |
 | `s` | Send a local file to the current chat |
 | `t` | Cycle Chats, Private, Groups and your Telegram folders |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
@@ -153,7 +159,7 @@ entry to the local menu extension at `~/.config/omarchy/extensions/omarchy-menu.
 
 Then run `omarchy menu refresh`. Open **Super+Space → Apps → Omagram**.
 
-The **Built for Omarchy** badge above is a community README badge from
+The **Omarchy App** badge above is a community README badge from
 [`tcballard/omarchy-badges`](https://github.com/tcballard/omarchy-badges); it is
 not an official Omarchy certification or security review.
 

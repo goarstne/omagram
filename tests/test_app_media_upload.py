@@ -11,7 +11,7 @@ from rich.text import Text
 from textual.widgets import Button, Input, ListView, Select, Static
 
 from telegram_tui.app import (
-    ChatListView, DialogItem, MediaScreen, MessagePanel, TelegramTui,
+    ChatListView, DialogItem, GifScreen, MediaScreen, MessagePanel, TelegramTui,
     UploadScreen, media_label, terminal_image,
 )
 from telegram_tui.client import Dialog, Message
@@ -33,6 +33,29 @@ def backend():
 
 
 class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_g_opens_recent_gif_picker_and_sends_selected_gif(self):
+        api = backend()
+        api.recent_gifs = AsyncMock(return_value=[SimpleNamespace(name="party.gif")])
+        api.send_gif = AsyncMock()
+        app = OfflineApp(api)
+        async with app.run_test() as pilot:
+            app.selected = api.dialogs[0]
+            app.query_one("#composer", Input).focus()
+            await pilot.press("g")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, GifScreen)
+            await pilot.press("enter")
+            await pilot.pause()
+            api.send_gif.assert_awaited_once_with(api.dialogs[0], api.recent_gifs.return_value[0])
+
+    async def test_footer_exposes_gif_and_send_shortcuts(self):
+        app = OfflineApp(backend())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            bindings = {(item.key, item.description) for item in app.query_one("Footer").walk_children()}
+            self.assertIn(("g", "GIF"), bindings)
+            self.assertIn(("s", "Send"), bindings)
+
     async def test_sidebar_cycles_chat_views(self):
         api = backend()
         app = OfflineApp(api)
@@ -41,8 +64,12 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(app.query_one("#dialog-tabs", Select).value, "all")
             app.action_cycle_tab()
             self.assertEqual(app.query_one("#dialog-tabs", Select).value, "private")
+            await pilot.pause()
+            api.load_dialogs.assert_awaited_with(tab="private")
             app.action_cycle_tab()
             self.assertEqual(app.query_one("#dialog-tabs", Select).value, "groups")
+            await pilot.pause()
+            api.load_dialogs.assert_awaited_with(tab="groups")
 
     def test_urls_are_emitted_as_clickable_links_and_punctuation_stays_plain(self):
         formatted = TelegramTui._format_links("See https://example.com/a?q=1&x=2, then <ok>")

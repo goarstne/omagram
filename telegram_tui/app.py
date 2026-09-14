@@ -12,19 +12,21 @@ from pathlib import Path
 
 from PIL import Image as PilImage, ImageColor
 from rich.markup import escape
+from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message as TextualMessage
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static, TextArea
 from textual.widget import Widget
 from textual.worker import Worker, WorkerState
 from textual_image._terminal import CellSize, get_cell_size
 # Unicode is the fallback; Foot uses native Sixel widgets below.
 
 from . import __version__
-from .client import Dialog, DialogTab, Message, TelegramBackend
+from .client import Dialog, DialogTab, Message, RecentGif, TelegramBackend
 from textual_image.widget import HalfcellImage as TerminalImage, TGPImage
 
 from .native_media import fit_image_widget, sixel_widget
@@ -417,8 +419,8 @@ class UploadScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="media-card"):
-            yield Static(f"Send document to: {self.dialog.title}", markup=False)
-            yield Label("Local file (1 byte–2 GiB)")
+            yield Static(f"Send document or GIF to: {self.dialog.title}", markup=False)
+            yield Label("Local file or GIF (1 byte–2 GiB)")
             yield Input(placeholder="/path/to/file", id="upload-path")
             yield Label("Caption (optional, up to 1024 characters)")
             yield Input(id="upload-caption")
@@ -550,6 +552,76 @@ class MediaScreen(ModalScreen[Message | None]):
         self.dismiss(None)
 
 
+class GifScreen(ModalScreen[object | None]):
+    """Picker for Telegram's native recently used GIF documents."""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+    DEFAULT_CSS = UploadScreen.DEFAULT_CSS
+
+    def __init__(self, gifs: list[object]):
+        super().__init__()
+        self.gifs = gifs
+
+    @staticmethod
+    def _label(gif: object, index: int) -> str:
+        if isinstance(gif, RecentGif):
+            return f"{index:02d} · {gif.name}"
+        name = (
+            getattr(gif, "name", None)
+            or getattr(getattr(gif, "file", None), "name", None)
+            or getattr(gif, "mime_type", None)
+            or "animated GIF"
+        )
+        return f"{index:02d} · {name}"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="media-card"):
+            yield Label("Recent GIFs · Enter to send · Esc to cancel")
+            yield ListView(
+                *(GifListItem(gif, self._label(gif, index)) for index, gif in enumerate(self.gifs, 1)),
+                id="gif-options",
+            )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        if event.list_view.index is not None:
+            self.dismiss(self.gifs[event.list_view.index])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class GifListItem(ListItem):
+    def __init__(self, gif: object, label: str):
+        super().__init__()
+        self.gif = gif
+        self.label = label
+
+    def compose(self) -> ComposeResult:
+        yield Label(self.label, classes="gif-label")
+        preview = getattr(self.gif, "preview", None)
+        if preview:
+            try:
+                yield terminal_image(
+                    prepare_terminal_image(preview, load_theme_palette()["background"]),
+                    height=6,
+                )
+            except Exception:
+                logger.exception("recent GIF preview render failed path=%s", preview)
+
+
+class ComposerInput(Input):
+    """Open the native GIF picker when an empty composer receives ``g``."""
+
+    class GifRequested(TextualMessage):
+        pass
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "g" and not self.value:
+            event.stop()
+            self.post_message(self.GifRequested())
+
+
 class MessagePanel(Vertical):
     """Batched transcript containing real widgets, not a nested scrolling log."""
 
@@ -565,7 +637,15 @@ class MessagePanel(Vertical):
         self._schedule()
 
     def write(self, content):
-        self._items.append(content if isinstance(content, Widget) else Static(content, markup=True))
+        if isinstance(content, Widget):
+            self._items.append(content)
+        else:
+            raw = str(content)
+            try:
+                plain = Text.from_markup(raw).plain
+            except Exception:
+                plain = raw
+            self._items.append(SelectableText(raw, plain))
         self._schedule()
 
     def _schedule(self):
@@ -596,6 +676,49 @@ class MessagePanel(Vertical):
             self.call_after_refresh(scroll.scroll_to, y=previous_y, animate=False)
 
 
+class SelectableText(Static):
+    """Transcript text that copies the selected range on mouse release."""
+
+    DEFAULT_CSS = """
+    SelectableText {
+        height: auto;
+        min-height: 1;
+        padding: 0;
+        background: transparent;
+    }
+    """
+
+    def __init__(self, markup: str, text: str):
+        super().__init__(markup, markup=True)
+        self._text = text
+        self._anchor: tuple[int, int] | None = None
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button != 1:
+            return
+        self._anchor = (event.offset.y, event.offset.x)
+        self.app.capture_mouse(self)
+        event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self._anchor is None:
+            return
+        end = (event.offset.y, event.offset.x)
+        self.app.capture_mouse(None)
+        start, finish = sorted((self._anchor, end))
+        lines = self._text.splitlines() or [self._text]
+        selected_lines = lines[start[0] : finish[0] + 1]
+        if selected_lines:
+            selected_lines[0] = selected_lines[0][start[1] :]
+            selected_lines[-1] = selected_lines[-1][: finish[1]]
+            selected = "\n".join(selected_lines).strip()
+            if selected:
+                self.app._last_copied_selection = selected
+                self.app._copy_to_clipboard(selected)
+        self._anchor = None
+        event.stop()
+
+
 class DialogItem(ListItem):
     def __init__(self, dialog: Dialog, label: str):
         super().__init__(Label(label))
@@ -619,9 +742,11 @@ class TelegramTui(App[None]):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "reload", "Reload", show=True),
-        Binding("c", "compose", "Write", show=True),
+        Binding("c", "cycle_tab", "Folder", show=True),
+        Binding("w", "compose", "Write", show=True),
+        Binding("g", "gif", "GIF", show=True),
         Binding("v", "choose_media", "Media", show=True),
-        Binding("s", "upload", "Send file", show=True),
+        Binding("s", "upload", "Send", show=True),
         Binding("t", "cycle_tab", "Next tab", show=True),
         Binding("b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
@@ -666,7 +791,7 @@ class TelegramTui(App[None]):
                 with VerticalScroll(id="messages-scroll"):
                     yield MessagePanel(id="messages")
                 yield Static("", id="status")
-                yield Input(placeholder="Write a message… (Enter to send · Esc for chats)", id="composer")
+                yield ComposerInput(placeholder="Write a message… (Enter send · g GIF · s Send · Esc chats)", id="composer")
         yield Footer()
 
     def on_resize(self, event: events.Resize) -> None:
@@ -818,7 +943,7 @@ class TelegramTui(App[None]):
         select.set_options([(tab.title, tab.key) for tab in tabs])
         select.value = self._active_tab if any(tab.key == self._active_tab for tab in tabs) else tabs[0].key
         active = next(tab for tab in tabs if tab.key == select.value)
-        self.query_one("#dialog-tabs-label", Static).update(f"Folder · {active.title}  (t)")
+        self.query_one("#dialog-tabs-label", Static).update(f"< {active.title} >  (c)")
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "dialog-tabs" or event.value == Select.BLANK:
@@ -826,12 +951,12 @@ class TelegramTui(App[None]):
         if str(event.value) == self._active_tab:
             return
         self._active_tab = str(event.value)
-        self._update_tab_button()
-        self.run_worker(self._reload_dialogs(), group="dialog-tab", exclusive=True, exit_on_error=False)
+        self._update_tab_label()
+        self.run_worker(self._reload_dialogs, group="dialog-tab", exclusive=True, exit_on_error=False)
 
-    def _update_tab_button(self) -> None:
+    def _update_tab_label(self) -> None:
         title = next((tab.title for tab in self._dialog_tabs if tab.key == self._active_tab), self._active_tab)
-        self.query_one("#dialog-tabs-label", Static).update(f"Folder · {title}  (t)")
+        self.query_one("#dialog-tabs-label", Static).update(f"< {title} >  (c)")
 
     def action_cycle_tab(self) -> None:
         keys = [tab.key for tab in self._dialog_tabs]
@@ -840,29 +965,43 @@ class TelegramTui(App[None]):
         index = keys.index(self._active_tab) if self._active_tab in keys else -1
         self._active_tab = keys[(index + 1) % len(keys)]
         self.query_one("#dialog-tabs", Select).value = self._active_tab
-        self._update_tab_button()
+        self._update_tab_label()
+        # Setting the hidden Select after updating _active_tab makes its
+        # change event a no-op; reload explicitly for keyboard cycling.
+        self.run_worker(self._reload_dialogs, group="dialog-tab", exclusive=True, exit_on_error=False)
 
-    def action_show_info(self) -> None:
-        self.push_screen(InfoScreen())
-
-    def action_copy_selection(self) -> None:
-        """Copy Textual input selections; terminal selections use native copy mode."""
-        selected = getattr(self.focused, "selected_text", "")
-        if not selected:
+    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
+        selected = event.text_area.selected_text.strip()
+        if not selected or selected == getattr(self, "_last_copied_selection", ""):
             return
+        self._last_copied_selection = selected
+        self._copy_to_clipboard(selected)
+
+    def _copy_to_clipboard(self, text: str) -> None:
         try:
             copier = resolve_trusted_binary("wl-copy")
             subprocess.run(
                 [copier, "--trim-newline"],
-                input=selected,
+                input=text,
                 text=True,
                 check=True,
+                timeout=2,
                 env=safe_subprocess_env(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("clipboard copy failed: %s", exc)
             return
-        self._set_status("Copied selection")
+        self._set_status("Copied to clipboard")
+
+    def action_show_info(self) -> None:
+        self.push_screen(InfoScreen())
+
+    def action_copy_selection(self) -> None:
+        """Copy the focused Textual selection."""
+        selected = getattr(self.focused, "selected_text", "")
+        if not selected:
+            return
+        self._copy_to_clipboard(selected)
 
     def action_compose(self) -> None:
         if self.selected is None:
@@ -872,6 +1011,49 @@ class TelegramTui(App[None]):
                 self._update_chat_title(self.selected)
                 self.run_worker(self._load_messages(self.selected), exclusive=True)
         self.query_one("#composer", Input).focus()
+
+    async def action_gif(self) -> None:
+        await self._open_gif_picker()
+
+    async def on_composer_input_gif_requested(self, event: ComposerInput.GifRequested) -> None:
+        event.stop()
+        await self._open_gif_picker()
+
+    async def _open_gif_picker(self) -> None:
+        if self.selected is None:
+            self._set_status("Select a chat before choosing a GIF", error=True)
+            return
+        try:
+            gifs = await asyncio.wait_for(
+                self.backend.recent_gifs(limit=12, include_previews=True), timeout=8
+            )
+        except Exception as exc:
+            logger.exception("recent GIF load failed")
+            self._set_status(f"GIFs unavailable: {exc}", error=True)
+            return
+        if not gifs:
+            self._set_status("No recent GIFs in Telegram", error=True)
+            return
+        self.push_screen(GifScreen(gifs), self._send_selected_gif)
+
+    def _send_selected_gif(self, gif: object | None) -> None:
+        if gif is None or self.selected is None:
+            return
+        self.run_worker(
+            self._send_gif(gif, self.selected),
+            group="send-gif",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def _send_gif(self, gif: object, dialog: Dialog) -> None:
+        try:
+            await self.backend.send_gif(dialog, gif)
+        except Exception as exc:
+            self._set_status(f"GIF send failed: {exc}", error=True)
+            return
+        self._set_status(f"GIF sent to {dialog.title}")
+        await self._after_send(dialog)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", Vertical)
@@ -1224,7 +1406,7 @@ class TelegramTui(App[None]):
             return (
                 f"[dim {self.palette['muted']}]{clock}[/] "
                 f"[bold {self.palette['accent']}]you[/] "
-                f"[bold {self.palette['accent']}]›[/] "
+                f"[bold {self.palette['accent']}]╡[/] "
                 f"[{self.palette['foreground']}]{safe_text}[/]"
             )
         else:
@@ -1232,7 +1414,7 @@ class TelegramTui(App[None]):
             return (
                 f"[dim {self.palette['muted']}]{clock}[/] "
                 f"[bold {self.palette['cyan']}]{safe_sender}[/] "
-                f"[dim {self.palette['muted']}]‹[/] "
+                f"[dim {self.palette['muted']}]╞[/] "
                 f"[{self.palette['light_foreground']}]{safe_text}[/]"
             )
 

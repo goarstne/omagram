@@ -13,6 +13,36 @@ from telegram_tui.client import Dialog, MAX_MEDIA_BYTES, TelegramBackend
 
 
 class FileUploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recent_gifs_uses_telegram_saved_gifs(self):
+        backend = object.__new__(TelegramBackend)
+        gifs = [object(), object()]
+        backend.client = AsyncMock(return_value=SimpleNamespace(gifs=gifs))
+        result = await backend.recent_gifs()
+        self.assertEqual(result, gifs)
+        backend.client.assert_awaited_once()
+
+    async def test_recent_gif_previews_never_download_full_media(self):
+        backend = object.__new__(TelegramBackend)
+        document = SimpleNamespace(id=42)
+        backend.client = AsyncMock(return_value=SimpleNamespace(gifs=[document]))
+        backend._cache_gif_thumbnail = AsyncMock(return_value=None)
+        result = await backend.recent_gifs(limit=12, include_previews=True)
+        self.assertEqual(len(result), 1)
+        backend._cache_gif_thumbnail.assert_awaited_once_with(
+            "saved-gifs", document, allow_media_fallback=False, timeout=3,
+        )
+
+    async def test_send_gif_uses_native_animated_media_path(self):
+        backend = object.__new__(TelegramBackend)
+        backend.client = SimpleNamespace(send_file=AsyncMock())
+        dialog = Dialog(1, "Recipient", 0, object())
+        gif = object()
+        await backend.send_gif(dialog, gif)
+        backend.client.send_file.assert_awaited_once_with(
+            dialog.entity, gif, caption="", parse_mode=None,
+            force_document=False, nosound_video=False,
+        )
+
     async def test_telethon_keeps_jpeg_as_unmodified_document(self):
         client = TelegramClient(None, 1, "test")
         backend = object.__new__(TelegramBackend)
@@ -62,6 +92,21 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
             path.write_bytes(b"file contents")
             await backend.send_file(dialog, path, "**literal**", progress)
         self.assertTrue(handles[0].closed)
+
+    async def test_gif_upload_marks_document_as_animated(self):
+        backend = object.__new__(TelegramBackend)
+        captured = {}
+
+        async def send_file(entity, handle, **kwargs):
+            captured.update(kwargs)
+
+        backend.client = SimpleNamespace(send_file=AsyncMock(side_effect=send_file))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "reaction.gif"
+            path.write_bytes(b"GIF89a test")
+            await backend.send_file(Dialog(1, "Recipient", 0, object()), path)
+        self.assertTrue(any(isinstance(attr, types.DocumentAttributeAnimated) for attr in captured["attributes"]))
+        self.assertEqual(captured["mime_type"], "image/gif")
 
     async def test_invalid_files_never_reach_telegram(self):
         backend = object.__new__(TelegramBackend)

@@ -20,6 +20,15 @@ class DialogTabTests(unittest.IsolatedAsyncioTestCase):
             ("groups", "Groups"), ("folder:7", "Work"),
         ])
 
+    async def test_accepts_telethon_dialog_filters_response(self):
+        backend = object.__new__(TelegramBackend)
+        folder = types.DialogFilter(
+            9, types.TextWithEntities("Archive", []), [], [], [], groups=True
+        )
+        backend.client = AsyncMock(return_value=SimpleNamespace(filters=[folder]))
+        tabs = await backend.load_dialog_tabs()
+        self.assertEqual(tabs[-1].title, "Archive")
+
     def test_builtin_views_filter_dialogs(self):
         backend = object.__new__(TelegramBackend)
         dialogs = [
