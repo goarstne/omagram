@@ -172,17 +172,15 @@ def build_css(p: dict[str, str]) -> str:
     }}
 
     #dialog-tabs-label {{
-        width: 1fr;
+        width: 100%;
+        height: 1;
+        padding: 0 1;
         color: {p["bright_foreground"]};
         text-style: bold;
     }}
 
     #dialog-tabs {{
-        width: 5;
-        height: 2;
-        border: tall {p["selection"]};
-        background: {p["lighter_background"]};
-        color: {p["bright_foreground"]};
+        display: none;
     }}
 
     #dialogs {{
@@ -657,12 +655,11 @@ class TelegramTui(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
             with Vertical(id="sidebar"):
-                with Horizontal(id="dialog-tabs-wrap"):
-                    yield Static("Chats", id="dialog-tabs-label")
-                    yield Select(
-                        [("Chats", "all"), ("Private", "private"), ("Groups", "groups")],
-                        value="all", allow_blank=False, id="dialog-tabs"
-                    )
+                yield Static("CHATS  [t]", id="dialog-tabs-label", markup=False)
+                yield Select(
+                    [("Chats", "all"), ("Private", "private"), ("Groups", "groups")],
+                    value="all", allow_blank=False, id="dialog-tabs"
+                )
                 yield ChatListView(id="dialogs")
             with Vertical(id="chat"):
                 yield Static("[dim]Select a chat · j/k to navigate · Enter to open[/dim]", id="chat-title")
@@ -821,7 +818,7 @@ class TelegramTui(App[None]):
         select.set_options([(tab.title, tab.key) for tab in tabs])
         select.value = self._active_tab if any(tab.key == self._active_tab for tab in tabs) else tabs[0].key
         active = next(tab for tab in tabs if tab.key == select.value)
-        self.query_one("#dialog-tabs-label", Static).update(f"Folder · {active.title}")
+        self.query_one("#dialog-tabs-label", Static).update(f"Folder · {active.title}  (t)")
 
     async def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "dialog-tabs" or event.value == Select.BLANK:
@@ -829,10 +826,12 @@ class TelegramTui(App[None]):
         if str(event.value) == self._active_tab:
             return
         self._active_tab = str(event.value)
-        self.query_one("#dialog-tabs-label", Static).update(
-            f"Folder · {next((tab.title for tab in self._dialog_tabs if tab.key == self._active_tab), self._active_tab)}"
-        )
+        self._update_tab_button()
         self.run_worker(self._reload_dialogs(), group="dialog-tab", exclusive=True, exit_on_error=False)
+
+    def _update_tab_button(self) -> None:
+        title = next((tab.title for tab in self._dialog_tabs if tab.key == self._active_tab), self._active_tab)
+        self.query_one("#dialog-tabs-label", Static).update(f"Folder · {title}  (t)")
 
     def action_cycle_tab(self) -> None:
         keys = [tab.key for tab in self._dialog_tabs]
@@ -841,9 +840,7 @@ class TelegramTui(App[None]):
         index = keys.index(self._active_tab) if self._active_tab in keys else -1
         self._active_tab = keys[(index + 1) % len(keys)]
         self.query_one("#dialog-tabs", Select).value = self._active_tab
-        self.query_one("#dialog-tabs-label", Static).update(
-            f"Folder · {next(tab.title for tab in self._dialog_tabs if tab.key == self._active_tab)}"
-        )
+        self._update_tab_button()
 
     def action_show_info(self) -> None:
         self.push_screen(InfoScreen())
