@@ -134,7 +134,9 @@ async def run_app(api_id: int, api_hash: str) -> None:
                 )
             await perform_interactive_login(backend)
 
-        await TelegramTui(backend).run_async()
+        # Let the terminal own mouse selection, like Herdr, so marked text is
+        # copied automatically by the Omarchy terminal.
+        await TelegramTui(backend).run_async(mouse=False)
     finally:
         if backend.client.is_connected():
             await backend.disconnect()
@@ -169,4 +171,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
