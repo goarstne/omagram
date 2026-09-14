@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Static
 from textual.widget import Widget
 from textual.worker import Worker, WorkerState
 from textual_image._terminal import CellSize, get_cell_size
@@ -400,6 +400,8 @@ class UploadScreen(ModalScreen[None]):
             yield Input(placeholder="/path/to/file", id="upload-path")
             yield Label("Caption (optional, up to 1024 characters)")
             yield Input(id="upload-caption")
+            with Horizontal(id="upload-actions"):
+                yield Button("Browse…", id="upload-browse")
             yield Static("", id="upload-status", markup=False)
             with Horizontal():
                 yield Button("Send", id="upload-send", variant="primary")
@@ -411,13 +413,19 @@ class UploadScreen(ModalScreen[None]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
+        if event.button.id == "upload-browse":
+            await self._choose_file()
+            return
         if event.button.id == "upload-cancel":
             await self.action_cancel()
         elif event.button.id == "upload-send" and self.worker is None:
             try:
                 value = self.query_one("#upload-path", Input).value
                 if not value:
-                    raise ValueError("Choose a local file")
+                    await self._choose_file()
+                    value = self.query_one("#upload-path", Input).value
+                if not value:
+                    raise ValueError("No file selected")
                 path = Path(value).expanduser().absolute()
                 info = path.stat()
                 if not stat.S_ISREG(info.st_mode) or not 1 <= info.st_size <= 2 * 1024**3:
@@ -431,6 +439,29 @@ class UploadScreen(ModalScreen[None]):
                 field.disabled = True
             self._cancel_requested = False
             self.worker = self.run_worker(partial(self._upload, path, caption), group="upload", exit_on_error=False)
+
+    async def _choose_file(self) -> None:
+        picker = resolve_trusted_binary("omarchy-file-select")
+        if not picker:
+            self.query_one("#upload-status", Static).update("Upload failed: no file picker is available")
+            return
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [picker, "--title", "Send file"],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                check=False,
+                env=safe_subprocess_env(),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.query_one("#upload-status", Static).update(f"File picker failed: {exc}")
+            return
+        if result.returncode == 0 and result.stdout.strip():
+            self.query_one("#upload-path", Input).value = result.stdout.strip().splitlines()[0]
+        elif result.returncode not in (1,):
+            self.query_one("#upload-status", Static).update("File picker failed")
 
     async def action_cancel(self) -> None:
         if self.worker is not None:
@@ -848,7 +879,10 @@ class TelegramTui(App[None]):
                     and previous.sender == message.sender
                     and 0 <= gap <= 300
                 )
-            panel.write(self._format_message(message, grouped=grouped))
+            has_links = bool(self._extract_urls(message.text))
+            panel.write(self._format_message(message, grouped=grouped, link_text=not has_links))
+            for url in self._extract_urls(message.text):
+                panel.write(Link(url, url=url, classes="message-link"))
             previous = message
             if message.media_path:
                 try:
@@ -1091,8 +1125,8 @@ class TelegramTui(App[None]):
         label = day.strftime("%a %d %b").upper()
         return f"[dim {self.palette['muted']}]── {label} ──[/]"
 
-    def _format_message(self, message: Message, *, grouped: bool = False) -> str:
-        safe_text = self._format_links(message.text)
+    def _format_message(self, message: Message, *, grouped: bool = False, link_text: bool = True) -> str:
+        safe_text = self._format_links(message.text) if link_text else escape(URL_RE.sub("↗", message.text))
         if grouped:
             # Same sender, same day, within a few minutes of the previous
             # line: drop the repeated time/sender header and show a
@@ -1117,7 +1151,18 @@ class TelegramTui(App[None]):
             )
 
     @staticmethod
-    def _format_links(text: str) -> str:
+    def _extract_urls(text: str) -> list[str]:
+        urls = []
+        for match in URL_RE.finditer(text):
+            url = match.group(0)
+            while url and url[-1] in ".,!?;:)":
+                url = url[:-1]
+            if url:
+                urls.append(url)
+        return urls
+
+    @classmethod
+    def _format_links(cls, text: str) -> str:
         """Escape chat text while emitting terminal-clickable OSC 8 links."""
         result: list[str] = []
         cursor = 0

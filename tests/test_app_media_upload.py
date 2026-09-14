@@ -40,6 +40,36 @@ class AppMediaUploadTests(unittest.IsolatedAsyncioTestCase):
         rendered = Text.from_markup(formatted)
         self.assertTrue(any(span.style == 'link "https://example.com/a?q=1&x=2"' for span in rendered.spans))
 
+    async def test_chat_urls_mount_as_browser_links(self):
+        api = backend()
+        app = OfflineApp(api)
+        message = Message("Alice", "Read https://example.com/docs.", datetime.now(), False)
+        async with app.run_test() as pilot:
+            app.selected = api.dialogs[0]
+            app._render_messages([message])
+            await pilot.pause()
+            link = app.query_one("Link")
+            with patch.object(app, "open_url") as open_url:
+                link.action_open_link()
+            open_url.assert_called_once_with("https://example.com/docs")
+
+    async def test_file_picker_fills_path_from_omarchy_chooser(self):
+        api = backend()
+        app = OfflineApp(api)
+        async with app.run_test() as pilot:
+            app.selected = api.dialogs[0]
+            app.action_upload()
+            screen = app.screen
+            await pilot.pause()
+            result = SimpleNamespace(returncode=0, stdout="/tmp/chosen file.txt\n", stderr="")
+            with patch("telegram_tui.app.resolve_trusted_binary", return_value="/usr/bin/omarchy-file-select"), patch(
+                "telegram_tui.app.subprocess.run", return_value=result
+            ) as run:
+                await screen._choose_file()
+            self.assertEqual(screen.query_one("#upload-path", Input).value, "/tmp/chosen file.txt")
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0][1:3], ["--title", "Send file"])
+
     async def test_upload_explicit_send_progress_chat_change_and_success(self):
         api = backend()
         started, finish = asyncio.Event(), asyncio.Event()

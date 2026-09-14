@@ -62,8 +62,8 @@ uv run omagram
 
 ## File uploads and media
 
-Press `s` in an open chat, enter a local path (`~` is supported), optionally
-add a caption, then choose **Send**. The modal shows the fixed recipient and
+Press `s` in an open chat and choose a file with the standard Omarchy file
+browser (or enter a local path manually). Optionally add a caption, then choose **Send**. The modal shows the fixed recipient and
 upload progress. Files are sent as documents: regular local files from 1 byte
 to 2 GiB, with captions up to 1024 UTF-16 units. Enter in a text field does not
 send. Only one upload can run at a time; chat updates cannot change its recipient.
@@ -76,7 +76,8 @@ Press Cancel again to close. Message text also stays in the composer when sendin
 Inline previews fit the available width and preserve proportions, without
 stretching small thumbnails. Media labels include the filename and byte size
 when available. Press `v`, select an item with arrow keys, and press Enter to
-open it; Esc cancels. Videos/GIFs use mpv when installed, with xdg-open as a
+open it; Esc cancels. URLs in messages are clickable and open in the default
+browser. Videos/GIFs use mpv when installed, with xdg-open as a
 fallback; documents use their default application.
 
 ---
