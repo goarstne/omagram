@@ -18,7 +18,7 @@
 > **OMAGRAM** — A fast, theme-aware, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
 
 <p align="center">
-  <img src="screenshots/chat-view.png" alt="omagram Terminal Screenshot" width="100%">
+  <img src="screenshots/release-0.1.png" alt="omagram Terminal Screenshot" width="100%">
 </p>
 
 ---
@@ -34,6 +34,8 @@
 > Telegram GIFs can be previewed and sent, while chat playback uses `mpv`.
 > Recent work also improves file sending, media previews, keyboard shortcuts,
 > and Omarchy launcher/menu integration.
+
+**Release 0.1** ships a practical first cut of media workflows: send local files with `s`, browse recent GIFs with `g`, preview media inline, and hand off GIF/video playback to `mpv`. The showcase image above is generated offline with simulated data, so it contains no private Telegram content.
 
 ```bash
 git clone https://github.com/goarstne/omagram.git
