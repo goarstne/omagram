@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import time
 from typing import Awaitable, Callable
@@ -104,6 +105,7 @@ class TelegramBackend:
         with open_verified_dir(cache_home / "omagram", mode=0o700) as app_cache:
             self.media_cache: VerifiedDir = app_cache.subdir("media", mode=0o700)
         self.dialogs: list[Dialog] = []
+        self._media_download_lock = asyncio.Lock()
         self.on_new_message: Callable[[int], Awaitable[None]] | None = None
         logger.info(
             "backend initialized session=%s connected=%s timeout=%s connection_retries=%s request_retries=%s",
@@ -407,6 +409,11 @@ class TelegramBackend:
         ]
 
     async def _cache_media(self, dialog_id: int, item: object) -> Path | None:
+        # ponytail: serialize full downloads; use per-message locks if parallel playback is needed.
+        async with self._media_download_lock:
+            return await self._download_media(dialog_id, item)
+
+    async def _download_media(self, dialog_id: int, item: object) -> Path | None:
         started = time.perf_counter()
         message_id = getattr(item, "id", None)
         if message_id is None:
@@ -783,3 +790,24 @@ class TelegramBackend:
 
     async def send_message(self, dialog: Dialog, text: str) -> None:
         await self.client.send_message(dialog.entity, text)
+
+    async def send_file(
+        self, dialog: Dialog, path: Path, caption: str = "", progress_callback=None
+    ) -> None:
+        """Upload an explicitly selected local file, preserving its name and bytes."""
+        path = Path(path).expanduser()
+        if len(caption.encode("utf-16-le")) // 2 > 1024:
+            raise ValueError("File caption must be at most 1024 characters")
+        # Nonblocking open also lets us reject FIFOs without freezing the UI.
+        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Select a regular file")
+            if not 0 < info.st_size <= MAX_MEDIA_BYTES:
+                raise ValueError("File must be nonempty and at most 2 GiB")
+            await self.client.send_file(
+                dialog.entity, handle, file_size=info.st_size,
+                caption=caption, parse_mode=None, force_document=True,
+                attributes=[types.DocumentAttributeFilename(path.name)],
+                progress_callback=progress_callback,
+            )

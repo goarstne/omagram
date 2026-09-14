@@ -48,11 +48,17 @@ def cache_cell_geometry() -> CellSize:
 
 
 def sixel_widget(image: PILImage.Image, max_height: int = 20) -> SixelImage:
+    return fit_image_widget(NativeSixelImage(image), image, max_height)
+
+
+def fit_image_widget(widget, image: PILImage.Image, max_height: int):
+    """Fit all renderers proportionally, without enlarging thumbnails."""
     cell = cache_cell_geometry()
-    widget = NativeSixelImage(image)
     # Never enlarge a small Telegram thumbnail to fill the whole transcript.
     scale = min(1, max_height * cell.height / image.height)
-    widget.styles.width = max(1, round(image.width * scale / cell.width))
-    widget.styles.max_width = "100%"
+    width = max(1, round(image.width * scale / cell.width))
+    # Sixel owns a child widget; other renderers need auto width on first layout.
+    widget.styles.width = width if isinstance(widget, SixelImage) else "auto"
+    widget.styles.max_width = "100%" if isinstance(widget, SixelImage) else width
     widget.styles.height = "auto"
     return widget

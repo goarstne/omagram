@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import stat
 import subprocess
 import tomllib
+from functools import partial
 from pathlib import Path
 
 from PIL import Image as PilImage, ImageColor
@@ -14,16 +16,17 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 from textual.widget import Widget
+from textual.worker import Worker, WorkerState
 from textual_image._terminal import CellSize, get_cell_size
 # Unicode is the fallback; Foot uses native Sixel widgets below.
-from textual_image.renderable.halfcell import Image as TerminalImage
-from textual_image.renderable.tgp import Image as TGPImage
 
 from . import __version__
 from .client import Dialog, Message, TelegramBackend
-from .native_media import sixel_widget
+from textual_image.widget import HalfcellImage as TerminalImage, TGPImage
+
+from .native_media import fit_image_widget, sixel_widget
 from .security import resolve_trusted_binary, safe_subprocess_env
 
 
@@ -287,9 +290,7 @@ def terminal_image(image: PilImage.Image, height: int = 20):
         image_class = TGPImage
     else:
         image_class = TerminalImage
-    # Let RichLog provide the actual available width. A fixed width can be
-    # wider than the chat column and gets overwritten by the scrollbar.
-    return image_class(image, width="auto", height=height)
+    return fit_image_widget(image_class(image), image, height)
 
 
 # Hand-built block-font wordmark, matching the width Omarchy uses for its own
@@ -367,6 +368,133 @@ class InfoScreen(ModalScreen[None]):
         self.dismiss()
 
 
+def media_label(message: Message) -> str:
+    name = message.media_name or message.youtube_url or message.media_kind or "Media"
+    size = f" · {message.media_size:,} bytes" if message.media_size is not None else ""
+    return f"{name}{size}"
+
+
+class UploadScreen(ModalScreen[None]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel", priority=True)]
+    DEFAULT_CSS = """
+    UploadScreen, MediaScreen { align: center middle; background: $om-darker_background 80%; }
+    .media-card { width: 72; max-width: 100%; height: auto; max-height: 100%;
+        padding: 1 2; border: solid $om-accent; background: $om-dark_background; }
+    .media-card Horizontal { height: auto; }
+    #upload-status { height: auto; min-height: 2; }
+    #media-options { height: 12; }
+    """
+
+    def __init__(self, dialog: Dialog):
+        super().__init__()
+        self.dialog = dialog
+        self.worker = None
+        self._cancel_requested = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="media-card"):
+            yield Static(f"Send document to: {self.dialog.title}", markup=False)
+            yield Label("Local file (1 byte–2 GiB)")
+            yield Input(placeholder="/path/to/file", id="upload-path")
+            yield Label("Caption (optional, up to 1024 characters)")
+            yield Input(id="upload-caption")
+            yield Static("", id="upload-status", markup=False)
+            with Horizontal():
+                yield Button("Send", id="upload-send", variant="primary")
+                yield Button("Cancel", id="upload-cancel")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Only the explicit Send button may send a file.
+        event.stop()
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "upload-cancel":
+            await self.action_cancel()
+        elif event.button.id == "upload-send" and self.worker is None:
+            try:
+                value = self.query_one("#upload-path", Input).value
+                if not value:
+                    raise ValueError("Choose a local file")
+                path = Path(value).expanduser().absolute()
+                info = path.stat()
+                if not stat.S_ISREG(info.st_mode) or not 1 <= info.st_size <= 2 * 1024**3:
+                    raise ValueError("Choose a regular file between 1 byte and 2 GiB")
+            except (OSError, ValueError) as exc:
+                self.query_one("#upload-status", Static).update(f"Upload failed: {exc}")
+                return
+            caption = self.query_one("#upload-caption", Input).value
+            self.query_one("#upload-send", Button).disabled = True
+            for field in self.query(Input):
+                field.disabled = True
+            self._cancel_requested = False
+            self.worker = self.run_worker(partial(self._upload, path, caption), group="upload", exit_on_error=False)
+
+    async def action_cancel(self) -> None:
+        if self.worker is not None:
+            worker = self.worker
+            self._cancel_requested = True
+            # Textual 8.2.8 needs the task to enter _run before cancellation.
+            await asyncio.sleep(0)
+            if self.worker is worker:
+                worker.cancel()
+        else:
+            self.dismiss()
+
+    async def _upload(self, path: Path, caption: str) -> None:
+        if self._cancel_requested:
+            raise asyncio.CancelledError
+        status = self.query_one("#upload-status", Static)
+        status.update("Uploading… 0%")
+
+        def progress(current: int, total: int) -> None:
+            percent = min(100, current * 100 // total) if total else 0
+            status.update(f"Uploading… {percent}% · {current:,}/{total:,} bytes")
+
+        try:
+            await self.app.backend.send_file(self.dialog, path, caption, progress_callback=progress)
+        except Exception as exc:
+            status.update(f"Upload failed: {exc}")
+        else:
+            self.dismiss()
+            self.app.run_worker(self.app._after_send(self.dialog), group="sent-refresh", exit_on_error=False)
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker is self.worker and event.worker.is_finished:
+            self.worker = None
+            if event.state == WorkerState.CANCELLED:
+                self.query_one("#upload-status", Static).update(
+                    "Upload cancelled; delivery may be uncertain. Check the chat before retrying."
+                )
+            self.query_one("#upload-send", Button).disabled = False
+            for field in self.query(Input):
+                field.disabled = False
+
+
+class MediaScreen(ModalScreen[Message | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+    DEFAULT_CSS = UploadScreen.DEFAULT_CSS
+
+    def __init__(self, messages: list[Message]):
+        super().__init__()
+        self.messages = messages
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="media-card"):
+            yield Label("Choose media · Enter to open · Esc to cancel")
+            yield ListView(*(ListItem(Label(
+                f"{m.timestamp:%H:%M} · {media_label(m)}", markup=False
+            )) for m in self.messages), id="media-options")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        event.stop()
+        if event.list_view.index is not None:
+            self.dismiss(self.messages[event.list_view.index])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class MessagePanel(Vertical):
     """Batched transcript containing real widgets, not a nested scrolling log."""
 
@@ -413,6 +541,12 @@ class MessagePanel(Vertical):
             self.call_after_refresh(scroll.scroll_to, y=previous_y, animate=False)
 
 
+class DialogItem(ListItem):
+    def __init__(self, dialog: Dialog, label: str):
+        super().__init__(Label(label))
+        self.dialog = dialog
+
+
 class ChatListView(ListView):
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
@@ -431,7 +565,8 @@ class TelegramTui(App[None]):
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "reload", "Reload", show=True),
         Binding("c", "compose", "Write", show=True),
-        Binding("v", "play_media", "Play media", show=True),
+        Binding("v", "choose_media", "Media", show=True),
+        Binding("ctrl+u", "upload", "Upload", show=True),
         Binding("b", "toggle_sidebar", "Sidebar", show=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
         Binding("escape", "focus_chats", "Chats", show=True),
@@ -449,6 +584,8 @@ class TelegramTui(App[None]):
         self._chat_generation = 0
         self._rendered_dialog_id: int | None = None
         self._play_worker = None
+        self._sending = False
+        self._dialogs_lock = asyncio.Lock()
         self._theme_signature: tuple[int, int] | None = None
 
     def get_css_variables(self) -> dict[str, str]:
@@ -541,39 +678,44 @@ class TelegramTui(App[None]):
             self._set_status(f"Error: {exc}", error=True)
 
     async def _reload_dialogs(self) -> None:
-        started = asyncio.get_running_loop().time()
-        logger.info("ui dialog reload started backend_count=%s", len(self.backend.dialogs))
-        view = self.query_one("#dialogs", ChatListView)
-        await view.clear()
-        dialogs = await self.backend.load_dialogs()
-        total_unread = 0
-        for dialog in dialogs:
-            total_unread += dialog.unread
-            preview = " ".join(dialog.preview.replace("\n", " ").split())
-            if len(preview) > 54:
-                preview = preview[:51].rstrip() + "…"
-            if dialog.unread:
-                label_text = (
-                    f"[bold {self.palette['bright_foreground']}]{escape(dialog.title)}[/]  "
-                    f"[bold {self.palette['accent']}][{dialog.unread}][/]"
+        async with self._dialogs_lock:
+            started = asyncio.get_running_loop().time()
+            logger.info("ui dialog reload started backend_count=%s", len(self.backend.dialogs))
+            view = self.query_one("#dialogs", ChatListView)
+            dialogs = list(await self.backend.load_dialogs())
+            highlighted = view.highlighted_child
+            keep_id = highlighted.dialog.id if isinstance(highlighted, DialogItem) else (
+                self.selected.id if self.selected else None
+            )
+            await view.clear()
+            total_unread = 0
+            for dialog in dialogs:
+                total_unread += dialog.unread
+                preview = " ".join(dialog.preview.replace("\n", " ").split())
+                if len(preview) > 54:
+                    preview = preview[:51].rstrip() + "…"
+                if dialog.unread:
+                    label_text = (
+                        f"[bold {self.palette['bright_foreground']}]{escape(dialog.title)}[/]  "
+                        f"[bold {self.palette['accent']}][{dialog.unread}][/]"
+                    )
+                else:
+                    label_text = f"[{self.palette['light_foreground']}]{escape(dialog.title)}[/]"
+                if preview:
+                    label_text += f"\n[dim {self.palette['muted']}]{escape(preview)}[/]"
+                await view.append(DialogItem(dialog, label_text))
+
+            if view.children:
+                view.index = next((i for i, dialog in enumerate(dialogs) if dialog.id == keep_id), 0)
+
+            title_widget = self.query_one("#sidebar-title", Label)
+            if total_unread:
+                title_widget.update(
+                    f"‹ CHATS ›  [bold {self.palette['accent']}]● {total_unread} UNREAD[/]"
                 )
             else:
-                label_text = f"[{self.palette['light_foreground']}]{escape(dialog.title)}[/]"
-            if preview:
-                label_text += f"\n[dim {self.palette['muted']}]{escape(preview)}[/]"
-            await view.append(ListItem(Label(label_text)))
-
-        if view.children and view.index is None:
-            view.index = 0
-
-        title_widget = self.query_one("#sidebar-title", Label)
-        if total_unread:
-            title_widget.update(
-                f"‹ CHATS ›  [bold {self.palette['accent']}]● {total_unread} UNREAD[/]"
-            )
-        else:
-            title_widget.update(f"‹ CHATS ›  [dim {self.palette['muted']}]{len(dialogs)}[/]")
-        logger.info("ui dialog reload completed count=%s elapsed=%.3fs", len(dialogs), asyncio.get_running_loop().time() - started)
+                title_widget.update(f"‹ CHATS ›  [dim {self.palette['muted']}]{len(dialogs)}[/]")
+            logger.info("ui dialog reload completed count=%s elapsed=%.3fs", len(dialogs), asyncio.get_running_loop().time() - started)
 
     async def action_reload(self) -> None:
         logger.info("manual reload requested connected=%s", self.backend.client.is_connected())
@@ -604,11 +746,10 @@ class TelegramTui(App[None]):
         self.push_screen(InfoScreen())
 
     def action_compose(self) -> None:
-        if self.selected is None and self.backend.dialogs:
-            view = self.query_one("#dialogs", ChatListView)
-            idx = view.index if view.index is not None else 0
-            if idx < len(self.backend.dialogs):
-                self.selected = self.backend.dialogs[idx]
+        if self.selected is None:
+            item = self.query_one("#dialogs", ChatListView).highlighted_child
+            if isinstance(item, DialogItem):
+                self.selected = item.dialog
                 self._update_chat_title(self.selected)
                 self.run_worker(self._load_messages(self.selected), exclusive=True)
         self.query_one("#composer", Input).focus()
@@ -633,12 +774,11 @@ class TelegramTui(App[None]):
         )
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        index = event.list_view.index
-        if index is None or index >= len(self.backend.dialogs):
-            logger.warning("chat selection ignored invalid_index=%s dialogs=%s", index, len(self.backend.dialogs))
+        if event.list_view.id != "dialogs":
             return
-        self.selected = self.backend.dialogs[index]
-        logger.info("chat selected index=%s dialog_id=%s title=%r", index, self.selected.id, self.selected.title)
+        if not isinstance(event.item, DialogItem):
+            return
+        self.selected = event.item.dialog
         self._update_chat_title(self.selected)
         self.run_worker(self._load_messages(self.selected), exclusive=True)
 
@@ -672,6 +812,8 @@ class TelegramTui(App[None]):
                 )
         except Exception as exc:
             logger.exception("chat load failed generation=%s dialog_id=%s", generation, dialog.id)
+            if generation != self._chat_generation or self.selected not in (None, dialog):
+                return
             panel = self.query_one("#messages", MessagePanel)
             panel.clear()
             panel.write(f"[bold {self.palette['red']}]Error loading messages: {escape(str(exc))}[/]")
@@ -721,23 +863,8 @@ class TelegramTui(App[None]):
                         message.media_kind,
                     )
                     panel.write(f"[{self.palette['red']}]Media preview unavailable[/]")
-            if message.media_kind == "video":
-                panel.write(
-                    f"[{self.palette['accent']}]▶ VIDEO[/]  "
-                    f"[{self.palette['light_foreground']}]{escape(message.media_name or 'Telegram video')}[/]  "
-                    f"[{self.palette['muted']}]press v to play[/]"
-                )
-            elif message.media_kind == "gif":
-                panel.write(
-                    f"[{self.palette['accent']}]◎ GIF[/]  "
-                    f"[{self.palette['light_foreground']}]{escape(message.media_name or 'Telegram GIF')}[/]  "
-                    f"[{self.palette['muted']}]press v to play[/]"
-                )
-            elif message.media_kind == "file":
-                panel.write(
-                    f"[{self.palette['accent']}]◆ FILE[/]  "
-                    f"[{self.palette['light_foreground']}]{escape(message.media_name or 'document')}[/]"
-                )
+            if message.media_kind:
+                panel.write(f"[{self.palette['accent']}]{escape(media_label(message))}[/] · v to choose media")
             if message.youtube_url:
                 if message.youtube_thumbnail_path:
                     try:
@@ -829,6 +956,36 @@ class TelegramTui(App[None]):
             self._render_messages(messages)
         logger.info("media hydration completed generation=%s dialog_id=%s failures=%s elapsed=%.3fs", generation, dialog.id, failures, asyncio.get_running_loop().time() - started)
 
+    def action_upload(self) -> None:
+        if any(isinstance(screen, UploadScreen) for screen in self.screen_stack):
+            return
+        if not self.selected:
+            self._set_status("Select a chat before uploading", error=True)
+            return
+        self.push_screen(UploadScreen(self.selected))
+
+    def action_choose_media(self) -> None:
+        dialog = self.selected
+        media = [m for m in reversed(self._current_messages) if m.media_kind or m.youtube_url]
+        if not dialog or not media:
+            self._set_status("No media in this chat", error=True)
+            return
+
+        def chosen(message: Message | None) -> None:
+            if message is not None:
+                self._start_media(dialog.id, message)
+
+        self.push_screen(MediaScreen(media), chosen)
+
+    def _start_media(self, dialog_id: int, message: Message) -> None:
+        if self._play_worker is not None and not self._play_worker.is_finished:
+            self._set_status("Media download already running…")
+            return
+        self._play_worker = self.run_worker(
+            self._play_media(dialog_id, message),
+            group="play-media", exclusive=True, exit_on_error=False,
+        )
+
     async def action_play_media(self) -> None:
         """Play the newest YouTube or Telegram video in an external player."""
         if self._play_worker is not None and not self._play_worker.is_finished:
@@ -838,27 +995,28 @@ class TelegramTui(App[None]):
         if not playable or not self.selected:
             self._set_status("No playable media in this chat", error=True)
             return
-        self._play_worker = self.run_worker(
-            self._play_media(self.selected.id, playable[-1]),
-            group="play-media", exclusive=True, exit_on_error=False,
-        )
+        self._start_media(self.selected.id, playable[-1])
 
     async def _play_media(self, dialog_id: int, media: Message) -> None:
         url = media.youtube_url
         if not url:
             self._set_status(
-                "Downloading GIF…" if media.media_kind == "gif" else "Downloading video…"
+                "Downloading media…"
             )
-            path = await self.backend.cache_media_for_message(dialog_id, media.source)
+            try:
+                path = await self.backend.cache_media_for_message(dialog_id, media.source)
+            except Exception as exc:
+                self._set_status(f"Media download failed: {exc}", error=True)
+                return
             if not path:
-                self._set_status("Could not download video", error=True)
+                self._set_status("Could not download media", error=True)
                 return
             url = str(path)
 
         if not url:
             self._set_status("No playable YouTube link in this chat", error=True)
             return
-        player = resolve_trusted_binary("mpv")
+        player = resolve_trusted_binary("mpv") if media.media_kind != "file" else None
         opener = player or resolve_trusted_binary("xdg-open")
         if not opener:
             self._set_status("No media player (mpv/xdg-open) found", error=True)
@@ -874,21 +1032,32 @@ class TelegramTui(App[None]):
             self._set_status(f"Could not open media: {exc}", error=True)
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        text = event.value.strip()
-        if not text or not self.selected:
-            logger.debug("send ignored empty=%s selected=%s", not bool(text), self.selected is not None)
+        if event.input.id != "composer" or self._sending:
             return
-        event.input.value = ""
-        logger.info("send started dialog_id=%s chars=%s", self.selected.id, len(text))
+        text = event.value.strip()
+        dialog = self.selected
+        if not text or not dialog:
+            return
+        self._sending = True
         try:
-            await self.backend.send_message(self.selected, text)
-            await self._load_messages(self.selected)
-            await self._reload_dialogs()
-            self._set_status(f"Sent to {self.selected.title}")
-            logger.info("send completed dialog_id=%s", self.selected.id)
+            await self.backend.send_message(dialog, text)
         except Exception as exc:
-            logger.exception("send failed dialog_id=%s", self.selected.id)
             self._set_status(f"Send failed: {exc}", error=True)
+        else:
+            if self.selected == dialog and event.input.value == event.value:
+                event.input.value = ""
+            await self._after_send(dialog)
+        finally:
+            self._sending = False
+
+    async def _after_send(self, dialog: Dialog) -> None:
+        self._set_status(f"Sent to {dialog.title}")
+        try:
+            if self.selected and self.selected.id == dialog.id:
+                await self._load_messages(self.selected)
+            await self._reload_dialogs()
+        except Exception as exc:
+            self._set_status(f"Sent to {dialog.title}; refresh failed: {exc}", error=True)
 
     def _schedule_live_message_refresh(self, chat_id: int) -> None:
         """Enter Textual's event loop before touching widgets.

@@ -13,6 +13,8 @@
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
+[![Built for Omarchy](https://raw.githubusercontent.com/tcballard/omarchy-badges/main/badges/v1/built-for-omarchy.svg)](https://github.com/tcballard/omarchy-badges)
+
 > **OMAGRAM** — A fast, theme-aware, keyboard-first Telegram terminal client (TUI) for Linux & Omarchy with native Sixel/Halfcell raster graphics and instant QR-code authentication.
 
 <p align="center">
@@ -49,11 +51,33 @@ uv run omagram
 | `c` | Compose message (focus text input) |
 | `Enter` *(in input)* | Send message |
 | `Escape` | Unfocus input / return to chat list |
-| `v` | Inspect latest image/animation |
+| `v` | Choose a photo, animation, video, document or YouTube link to open |
+| `Ctrl+u` | Upload a local file to the current chat |
 | `b` / `Ctrl+b` | Toggle chat sidebar |
 | `r` | Reload chats and messages |
 | `i` | Show demoscene release credits card |
 | `q` / `Ctrl+c` | Exit Omagram |
+
+---
+
+## File uploads and media
+
+Press `Ctrl+u` in an open chat, enter a local path (`~` is supported), optionally
+add a caption, then choose **Send**. The modal shows the fixed recipient and
+upload progress. Files are sent as documents: regular local files from 1 byte
+to 2 GiB, with captions up to 1024 UTF-16 units. Enter in a text field does not
+send. Only one upload can run at a time; chat updates cannot change its recipient.
+
+Errors preserve the path and caption for retry. **Cancel** or `Esc` closes an
+idle form; during upload it stops the worker and keeps the form. Check the chat
+before retrying a cancelled transfer, since delivery may already have occurred.
+Press Cancel again to close. Message text also stays in the composer when sending fails.
+
+Inline previews fit the available width and preserve proportions, without
+stretching small thumbnails. Media labels include the filename and byte size
+when available. Press `v`, select an item with arrow keys, and press Enter to
+open it; Esc cancels. Videos/GIFs use mpv when installed, with xdg-open as a
+fallback; documents use their default application.
 
 ---
 
@@ -108,6 +132,28 @@ omarchy plugin enable goarstne.omagram
 ```
 
 Clicking the Telegram status icon (`󰗊`) in your Omarchy bar spawns Omagram directly inside your terminal workspace.
+
+### Omarchy menu (Super+Space)
+
+The Omarchy menu reads applications from standard `.desktop` entries. Add this
+entry to the local menu extension at `~/.config/omarchy/extensions/omarchy-menu.jsonc`:
+
+```jsonc
+"apps.omagram": {
+  "icon": "󰗊",
+  "label": "Omagram",
+  "description": "Telegram terminal client",
+  "aliases": ["telegram", "omagram"],
+  "when": "[[ -x $HOME/Projects/omagram/run-omagram ]]",
+  "action": "omarchy-launch-or-focus-tui --app-id=org.omarchy.omagram $HOME/Projects/omagram/run-omagram"
+},
+```
+
+Then run `omarchy menu refresh`. Open **Super+Space → Apps → Omagram**.
+
+The **Built for Omarchy** badge above is a community README badge from
+[`tcballard/omarchy-badges`](https://github.com/tcballard/omarchy-badges); it is
+not an official Omarchy certification or security review.
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +39,28 @@ class SizeGuardTests(unittest.TestCase):
 
 
 class CacheMediaLimitsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_requests_share_completed_download(self):
+        with tempfile.TemporaryDirectory() as cache_dir, tempfile.TemporaryDirectory() as session_dir:
+            backend = make_backend(cache_dir, session_dir)
+
+            async def fake_download(item, file, progress_callback=None):
+                await asyncio.sleep(0.01)
+                Path(file).write_bytes(b"data")
+                return file
+
+            backend.client.download_media = AsyncMock(side_effect=fake_download)
+            item = SimpleNamespace(id=7, file=SimpleNamespace(size=4, ext=".mp4"))
+            try:
+                results = await asyncio.gather(
+                    backend.cache_media_for_message(1, item),
+                    backend.cache_media_for_message(1, item),
+                )
+                self.assertIsNotNone(results[0])
+                self.assertEqual(results[0], results[1])
+                backend.client.download_media.assert_awaited_once()
+            finally:
+                close_backend(backend)
+
     async def test_declared_oversize_skips_download_entirely(self):
         with tempfile.TemporaryDirectory() as cache_dir, tempfile.TemporaryDirectory() as session_dir:
             backend = make_backend(cache_dir, session_dir)
