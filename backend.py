@@ -17,7 +17,7 @@ def selected_ids(value):
         not isinstance(item, str) or not item.isascii() or not item.isdigit()
         or not 0 < int(item) < 2**63 for item in value
     ):
-        raise ValueError("Ungültige Kontaktauswahl")
+        raise ValueError("Invalid contact selection")
     return sorted(set(value))
 
 
@@ -26,7 +26,7 @@ def contact_row(user, unread=0, messages=None):
         return None
     return {
         "id": str(user.id),
-        "name": " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)])) or getattr(user, "username", "") or "Unbenannt",
+        "name": " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)])) or getattr(user, "username", "") or "Unnamed",
         "username": getattr(user, "username", "") or "",
         "unread": unread,
         "messages": messages or [],
@@ -43,8 +43,8 @@ def format_time(dt):
         if hasattr(local_dt, "date") and local_dt.date() == now.date():
             return local_dt.strftime("%H:%M")
         elif hasattr(local_dt, "date") and (now.date() - local_dt.date()).days == 1:
-            return f"Gestern {local_dt.strftime('%H:%M')}"
-        return local_dt.strftime("%d.%m. %H:%M")
+            return f"Yesterday {local_dt.strftime('%H:%M')}"
+        return local_dt.strftime("%b %d, %H:%M")
     except Exception:
         return ""
 
@@ -63,27 +63,27 @@ def format_message(msg):
 
     if not text:
         if getattr(msg, "photo", None):
-            text = "[Foto]"
+            text = "[Photo]"
         elif getattr(msg, "voice", None):
-            text = "[Sprachnachricht]"
+            text = "[Voice message]"
         elif getattr(msg, "video_note", None):
-            text = "[Videonachricht]"
+            text = "[Video message]"
         elif getattr(msg, "video", None):
             text = "[Video]"
         elif getattr(msg, "audio", None):
-            text = "[Audiodatei]"
+            text = "[Audio]"
         elif getattr(msg, "sticker", None):
             emoji = getattr(getattr(msg, "file", None), "emoji", "")
             text = f"[Sticker {emoji}]" if emoji else "[Sticker]"
         elif getattr(msg, "gif", None):
             text = "[GIF]"
         elif getattr(msg, "poll", None):
-            text = "[Umfrage]"
+            text = "[Poll]"
         elif getattr(msg, "document", None):
             file_name = getattr(getattr(msg, "file", None), "name", None)
-            text = f"[Datei: {file_name}]" if file_name else "[Datei]"
+            text = f"[File: {file_name}]" if file_name else "[File]"
         else:
-            text = "[Nachricht]"
+            text = "[Message]"
     elif getattr(msg, "photo", None):
         text = f"📷 {text}"
     elif getattr(msg, "video", None):
@@ -119,12 +119,12 @@ def memory_session(path):
     validate_session_path(path)
     filename = path if path.name.endswith(".session") else path.with_name(path.name + ".session")
     if not filename.is_file():
-        raise RuntimeError("Bitte zuerst in Omagram bei Telegram anmelden.")
+        raise RuntimeError("Please log in to Telegram in Omagram first.")
     # Never let the watcher write or lock Omagram's session database.
     with contextlib.closing(sqlite3.connect(filename.absolute().as_uri() + "?mode=ro", uri=True)) as db:
         row = db.execute("SELECT dc_id, server_address, port, auth_key FROM sessions LIMIT 1").fetchone()
     if not row or not row[3]:
-        raise RuntimeError("Bitte zuerst in Omagram bei Telegram anmelden.")
+        raise RuntimeError("Please log in to Telegram in Omagram first.")
     session = MemorySession()
     session.set_dc(*row[:3])
     session.auth_key = AuthKey(row[3])
@@ -137,7 +137,7 @@ class Watcher:
         self.contacts = {}
         self.selected = set()
         self.connected = False
-        self.error = "Verbindung wird hergestellt …"
+        self.error = "Connecting …"
         self.wake = asyncio.Event()
         self.stopped = False
         self.reload_contacts = True
@@ -180,7 +180,7 @@ class Watcher:
                 if hasattr(client, "send_read_acknowledge"):
                     await client.send_read_acknowledge(int(uid))
             except Exception as exc:
-                logging.warning("Gelesen markieren fehlgeschlagen für %s: %s", uid, exc)
+                logging.warning("Mark as read failed for %s: %s", uid, exc)
 
     async def commands(self):
         reader = asyncio.StreamReader(limit=65536)
@@ -192,7 +192,7 @@ class Watcher:
                 try:
                     command = json.loads(line)
                     if not isinstance(command, dict):
-                        raise ValueError("Ungültiger Befehl")
+                        raise ValueError("Invalid command")
                     if "toggle" in command:
                         self.toggle(command["toggle"])
                     elif "selected" in command:
@@ -203,7 +203,7 @@ class Watcher:
                         self.reload_contacts = True
                         self.wake.set()
                 except (ValueError, OSError):
-                    self.error = "Kontaktauswahl konnte nicht gespeichert werden."
+                    self.error = "Could not save contact selection."
                     self.publish()
         finally:
             transport.close()
@@ -218,7 +218,7 @@ class Watcher:
             history = await client.get_messages(entity, limit=limit)
             return [format_message(m) for m in reversed(history)]
         except Exception as exc:
-            logging.warning("Nachrichten laden fehlgeschlagen: %s", exc)
+            logging.warning("Loading messages failed: %s", exc)
             return [format_message(fallback_message)] if fallback_message else []
 
     async def refresh(self, client):
@@ -281,7 +281,7 @@ class Watcher:
                     async with asyncio.timeout(45):
                         await client.connect()
                         if not await client.is_user_authorized():
-                            raise RuntimeError("Bitte zuerst in Omagram bei Telegram anmelden.")
+                            raise RuntimeError("Please log in to Telegram in Omagram first.")
                         await client.get_me()
                     self.reload_contacts = True
                     while not self.stopped:
@@ -297,7 +297,7 @@ class Watcher:
                 except Exception as exc:
                     self.connected = False
                     self.error = str(exc) if type(exc) is RuntimeError else (
-                        "Telegram nicht erreichbar (" + type(exc).__name__ + "). Neuer Versuch in 60 s."
+                        "Telegram unreachable (" + type(exc).__name__ + "). Retrying in 60 s."
                     )
                     self.publish()
                     self.wake.clear()
@@ -329,7 +329,7 @@ def main():
             asyncio.run(Watcher(directory).run())
     except (OSError, ValueError) as exc:
         print(json.dumps({"connected": False, "contacts": [], "selected": [], "unread": 0,
-                          "error": "VIPgram-Konfiguration konnte nicht geladen werden (" + type(exc).__name__ + ")."}), flush=True)
+                          "error": "Could not load widget configuration (" + type(exc).__name__ + ")."}), flush=True)
         return 1
     return 0
 

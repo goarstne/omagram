@@ -250,7 +250,7 @@ class TelegramBackend:
             loaded = [
                 Dialog(
                     id=dialog.id,
-                    title=dialog.name or "(ohne Titel)",
+                    title=dialog.name or "(untitled)",
                     unread=dialog.unread_count,
                     entity=dialog.entity,
                     preview=(dialog.message.message if dialog.message else "") or ("[media]" if dialog.message and dialog.message.media else ""),

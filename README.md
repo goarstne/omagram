@@ -134,7 +134,7 @@ Omagram ships a native Quickshell status bar plugin for Omarchy with live VIP co
 - **VIP Direct Message Alerts:** Select contacts whose direct messages matter to you.
 - **Color-Coded Initials in Status Bar:** When a VIP writes, their initial appears in your bar (e.g. `R` for Rae, `A` for Ada, `RA` for both). Each contact receives a distinctive, persistent color.
 - **Click to Read Inline:** Click any letter badge in the status bar to open the popup card and read unread messages right in the bar widget—without switching away from your current window!
-- **Quick Actions:** Mark messages as read directly in the popup, or click **"In Omagram öffnen"** to jump into the full terminal chat.
+- **Quick Actions:** Mark messages as read directly in the popup, or click **"Open in Omagram"** to jump into the full terminal chat.
 - **Multi-VIP Switcher:** When multiple VIPs write, easily switch between their messages via contact chips in the header.
 - **Fallback Launcher:** When no VIP messages are unread, the widget displays the clean Telegram icon (`󰗊`). Left-click opens the VIP contact selector, right-click launches Omagram.
 

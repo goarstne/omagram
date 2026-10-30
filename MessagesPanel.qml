@@ -48,7 +48,7 @@ ColumnLayout {
 
       Text {
         Layout.fillWidth: true
-        text: root.contact ? root.contact.name : "VIP-Nachricht"
+        text: root.contact ? root.contact.name : "VIP message"
         color: Color.foreground
         font.family: Style.font.family
         font.pixelSize: Style.font.heading
@@ -62,8 +62,8 @@ ColumnLayout {
           if (!root.contact) return ""
           var info = root.contact.username ? "@" + root.contact.username : ""
           var unread = root.contact.unread > 0
-            ? (root.contact.unread === 1 ? "1 ungelesene Nachricht" : root.contact.unread + " ungelesene Nachrichten")
-            : "Keine ungelesenen Nachrichten"
+            ? (root.contact.unread === 1 ? "1 unread message" : root.contact.unread + " unread messages")
+            : "No unread messages"
           return info ? info + " · " + unread : unread
         }
         color: Color.muted
@@ -76,21 +76,21 @@ ColumnLayout {
     Ui.PanelActionButton {
       visible: root.contact && root.contact.unread > 0
       iconText: "󰄲"
-      tooltipText: "Als gelesen markieren"
+      tooltipText: "Mark as read"
       focusable: true
       onClicked: if (root.service && root.contact) root.service.markRead(root.contact.id)
     }
 
     Ui.PanelActionButton {
       iconText: "󰒓"
-      tooltipText: "VIP-Liste verwalten"
+      tooltipText: "Manage VIP list"
       focusable: true
       onClicked: root.openContactsList()
     }
 
     Ui.PanelActionButton {
       iconText: "󰅖"
-      tooltipText: "Schließen"
+      tooltipText: "Close"
       focusable: true
       onClicked: root.dismiss()
     }
@@ -204,8 +204,8 @@ ColumnLayout {
       width: parent.width - Style.spacing.md * 2
       visible: messagesList.count === 0
       text: root.contact && root.contact.unread > 0
-        ? "Nachricht wird geladen …"
-        : (root.contact ? "Keine ungelesenen Nachrichten von " + root.contact.name + "." : "Keine Nachrichten vorhanden.")
+        ? "Loading message …"
+        : (root.contact ? "No unread messages from " + root.contact.name + "." : "No messages.")
       color: Color.muted
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.WordWrap
@@ -221,14 +221,14 @@ ColumnLayout {
 
     Ui.Button {
       Layout.fillWidth: true
-      text: "In Omagram öffnen"
+      text: "Open in Omagram"
       focusable: true
       onClicked: root.openOmagram()
     }
 
     Ui.Button {
       visible: root.contact && root.contact.unread > 0
-      text: "Als gelesen markieren"
+      text: "Mark as read"
       focusable: true
       onClicked: if (root.service && root.contact) root.service.markRead(root.contact.id)
     }

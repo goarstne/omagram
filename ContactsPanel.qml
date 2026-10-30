@@ -7,7 +7,7 @@ import qs.Ui as Ui
 ColumnLayout {
   id: root
   property var service: null
-  readonly property var status: service ? service.status : ({connected: false, contacts: [], selected: [], unread: 0, error: "VIPgram wird geladen …"})
+  readonly property var status: service ? service.status : ({connected: false, contacts: [], selected: [], unread: 0, error: "Loading Omagram …"})
   readonly property Item focusTarget: search
   readonly property var visibleContacts: status.contacts.filter(function(c) {
     var query = search.text.trim().toLocaleLowerCase()
@@ -34,19 +34,19 @@ ColumnLayout {
     Ui.PanelActionButton {
       visible: root.hasPendingMessages
       iconText: "󰍡"
-      tooltipText: "Ungelesene VIP-Nachrichten anzeigen"
+      tooltipText: "Show unread VIP messages"
       focusable: true
       onClicked: root.openMessages()
     }
     Ui.PanelActionButton {
       iconText: "󰑐"
-      tooltipText: "Kontakte aktualisieren / erneut verbinden"
+      tooltipText: "Refresh contacts / reconnect"
       focusable: true
       onClicked: if (root.service) root.service.refresh()
     }
     Ui.PanelActionButton {
       iconText: "󰅖"
-      tooltipText: "Schließen"
+      tooltipText: "Close"
       focusable: true
       onClicked: root.dismiss()
     }
@@ -55,7 +55,7 @@ ColumnLayout {
   Text {
     Layout.fillWidth: true
     textFormat: Text.PlainText
-    text: root.status.error || (root.status.selected.length + " ausgewählt · " + root.status.unread + " ungelesen")
+    text: root.status.error || (root.status.selected.length + " selected · " + root.status.unread + " unread")
     color: root.status.error ? Color.urgent : Color.muted
     wrapMode: Text.WordWrap
     font.family: Style.font.family
@@ -66,8 +66,8 @@ ColumnLayout {
     id: search
     objectName: "contactSearch"
     Layout.fillWidth: true
-    placeholderText: "Name oder @Benutzername suchen …"
-    Accessible.name: "Kontakte durchsuchen"
+    placeholderText: "Search name or @username …"
+    Accessible.name: "Search contacts"
     Keys.onDownPressed: { list.forceActiveFocus(); list.currentIndex = 0 }
   }
 
@@ -75,7 +75,7 @@ ColumnLayout {
     id: onlySelected
     objectName: "selectedFilter"
     Layout.fillWidth: true
-    label: "Nur ausgewählte Kontakte"
+    label: "Selected contacts only"
     checked: false
     onClicked: checked = !checked
   }
@@ -98,7 +98,7 @@ ColumnLayout {
       width: ListView.view.width
       label: modelData.name
       description: (modelData.username ? "@" + modelData.username + " · " : "")
-        + (modelData.unread > 0 ? modelData.unread + " ungelesen" : "Keine ungelesenen Nachrichten")
+        + (modelData.unread > 0 ? modelData.unread + " unread" : "No unread messages")
       checked: root.status.selected.indexOf(modelData.id) >= 0
       hasCursor: ListView.isCurrentItem && list.activeFocus
       Accessible.role: Accessible.CheckBox
@@ -111,8 +111,8 @@ ColumnLayout {
       anchors.centerIn: parent
       width: parent.width
       visible: list.count === 0
-      text: root.status.connected ? "Keine passenden Kontakte."
-        : (root.status.error.indexOf("geladen") >= 0 ? "Kontakte werden geladen …" : "Keine Verbindung zu Telegram.")
+      text: root.status.connected ? "No matching contacts."
+        : (root.status.error.indexOf("Loading") >= 0 ? "Loading contacts …" : "Not connected to Telegram.")
       color: Color.muted
       horizontalAlignment: Text.AlignHCenter
       wrapMode: Text.WordWrap
@@ -123,7 +123,7 @@ ColumnLayout {
 
   Text {
     Layout.fillWidth: true
-    text: "Wähle Personen aus, deren Direktnachrichten dich interessieren. Die Auswahl wird automatisch gespeichert."
+    text: "Pick the people whose direct messages you want to see here. Your selection is saved automatically."
     color: Color.muted
     wrapMode: Text.WordWrap
     font.family: Style.font.family
@@ -132,7 +132,7 @@ ColumnLayout {
 
   Ui.Button {
     Layout.fillWidth: true
-    text: "Omagram öffnen"
+    text: "Open Omagram"
     focusable: true
     onClicked: root.openOmagram()
   }

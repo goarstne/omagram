@@ -8,7 +8,7 @@ Ui.BarWidget {
   id: root
   moduleName: "goarstne.omagram"
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
-  readonly property var status: service ? service.status : ({connected: false, contacts: [], selected: [], unread: 0, error: "Omagram-Widget wird geladen …"})
+  readonly property var status: service ? service.status : ({connected: false, contacts: [], selected: [], unread: 0, error: "Loading Omagram widget …"})
   readonly property var pendingContacts: status.connected ? status.contacts.filter(function(c) {
     return root.status.selected.indexOf(c.id) >= 0 && c.unread > 0
   }).sort(function(a, b) { return a.name.localeCompare(b.name) }) : []
@@ -55,9 +55,9 @@ Ui.BarWidget {
     tooltipText: {
       if (!root.service || !root.status.connected) return "Omagram · Telegram TUI"
       var messages = root.pendingContacts.map(function(c) { return c.name + ": " + c.unread })
-      return "Omagram · " + root.status.selected.length + " VIP-Kontakte ausgewählt\n"
-        + (messages.length ? messages.join("\n") : "Keine ungelesenen VIP-Nachrichten")
-        + (root.pendingContacts.length ? "\nKlick auf Buchstabe: Nachricht lesen · Rechtsklick: Omagram öffnen" : "\nKlick: Kontakte auswählen · Rechtsklick: Omagram öffnen")
+      return "Omagram · " + root.status.selected.length + " VIP contacts selected\n"
+        + (messages.length ? messages.join("\n") : "No unread VIP messages")
+        + (root.pendingContacts.length ? "\nClick a letter: read message · Right-click: open Omagram" : "\nClick: choose contacts · Right-click: open Omagram")
     }
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.LeftButton) {

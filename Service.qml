@@ -4,7 +4,7 @@ import Quickshell.Io
 
 Item {
   id: root
-  property var status: ({connected: false, contacts: [], selected: [], unread: 0, error: "Verbindung wird hergestellt …"})
+  property var status: ({connected: false, contacts: [], selected: [], unread: 0, error: "Connecting …"})
   readonly property string pluginPath: decodeURIComponent(String(Qt.resolvedUrl(".")).replace(/^file:\/\//, ""))
 
   function select(id) {
@@ -30,11 +30,11 @@ Item {
     stdout: SplitParser {
       onRead: function(line) {
         try { root.status = JSON.parse(line) }
-        catch (error) { console.warn("Omagram: ungültige Statusantwort") }
+        catch (error) { console.warn("Omagram: invalid status response") }
       }
     }
     onExited: {
-      root.status = Object.assign({}, root.status, {connected: false, error: "Omagram-Widget wurde beendet. Erneut verbinden …"})
+      root.status = Object.assign({}, root.status, {connected: false, error: "Omagram widget stopped. Reconnecting …"})
       restart.restart()
     }
   }
