@@ -132,6 +132,7 @@ class TelegramBackend:
             DialogTab("all", "Chats", "all"),
             DialogTab("private", "Private", "private"),
             DialogTab("groups", "Groups", "groups"),
+            DialogTab("archived", "Archived", "archived"),
         ]
         self._custom_filters: dict[str, object] = {}
         self._media_download_lock = asyncio.Lock()
@@ -221,6 +222,7 @@ class TelegramBackend:
             DialogTab("all", "Chats", "all"),
             DialogTab("private", "Private", "private"),
             DialogTab("groups", "Groups", "groups"),
+            DialogTab("archived", "Archived", "archived"),
         ]
         try:
             filters = await self.client(functions.messages.GetDialogFiltersRequest())
@@ -263,7 +265,7 @@ class TelegramBackend:
                     is_archived=bool(getattr(dialog, "archived", False)),
                     is_muted=self._dialog_is_muted(dialog),
                 )
-                async for dialog in self.client.iter_dialogs(limit=limit)
+                async for dialog in self.client.iter_dialogs(limit=limit, archived=self._archived_scope(tab))
                 if dialog.is_user or dialog.is_group or dialog.is_channel
             ]
             self.dialogs = self._filter_dialogs(loaded, tab)
@@ -272,6 +274,18 @@ class TelegramBackend:
         except Exception:
             logger.exception("dialog load failed limit=%s elapsed=%.3fs", limit, time.perf_counter() - started)
             raise
+
+    def _archived_scope(self, tab: str) -> bool | None:
+        """Which Telegram folder to fetch: archive only, main list only, or both.
+
+        Built-in views mirror the official apps and leave archived chats out;
+        custom folders fetch both and apply their own exclude_archived flag.
+        """
+        if tab == "archived":
+            return True
+        if tab in getattr(self, "_custom_filters", {}):
+            return None
+        return False
 
     @staticmethod
     def _dialog_is_muted(dialog: object) -> bool:
@@ -284,11 +298,15 @@ class TelegramBackend:
         return mute_until > now
 
     def _filter_dialogs(self, dialogs: list[Dialog], tab: str) -> list[Dialog]:
+        if tab == "archived":
+            return [dialog for dialog in dialogs if dialog.is_archived]
+        folder = getattr(self, "_custom_filters", {}).get(tab)
+        if folder is None:
+            dialogs = [dialog for dialog in dialogs if not dialog.is_archived]
         if tab == "private":
             return [dialog for dialog in dialogs if dialog.is_private]
         if tab == "groups":
             return [dialog for dialog in dialogs if dialog.is_group]
-        folder = getattr(self, "_custom_filters", {}).get(tab)
         if folder is None:
             return dialogs
         include = {utils.get_peer_id(peer) for peer in getattr(folder, "include_peers", [])}

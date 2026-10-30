@@ -233,7 +233,8 @@ class Watcher:
                 if row:
                     rows[row["id"]] = row
             self.reload_contacts = False
-        async for dialog in client.iter_dialogs(ignore_migrated=True):
+        # Archived chats (often spam) are hidden in the official apps; skip them here too.
+        async for dialog in client.iter_dialogs(ignore_migrated=True, archived=False):
             if isinstance(dialog.entity, types.User):
                 user_id = str(dialog.entity.id)
                 unread = getattr(dialog, "unread_count", 0)
