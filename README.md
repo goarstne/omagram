@@ -69,6 +69,19 @@ uv run omagram
 | `i` | Show demoscene release credits card |
 | `q` / `Ctrl+c` | Exit Omagram |
 
+### Copy & paste
+
+- **Copy:** drag over message text with the mouse. The selection is highlighted
+  and copied to the system clipboard (`wl-copy`) when you release the button,
+  so it is ready for `Super+V`. Omarchy's terminals handle `Super+C`
+  (`Ctrl+Insert`) themselves, so that key never reaches Omagram. In terminals
+  that pass it through, `Ctrl+Insert` and `Ctrl+c` copy the current selection,
+  including text selected in the composer.
+- **Paste:** `Super+V` (or any terminal paste) inserts the clipboard into the
+  composer, even while the chat list is focused. Multi-line text is joined into
+  one line rather than cut off after the first line. `Ctrl+v` in the composer
+  reads the system clipboard (`wl-paste`).
+
 ---
 
 ## File uploads and media

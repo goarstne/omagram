@@ -17,6 +17,7 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message as TextualMessage
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Link, ListItem, ListView, Select, Static
@@ -623,11 +624,59 @@ class GifListItem(ListItem):
                 logger.exception("recent GIF preview render failed path=%s", preview)
 
 
+def _single_line(text: str) -> str:
+    """Flatten pasted text for the one-line composer instead of truncating it."""
+    lines = text.splitlines()
+    if len(lines) <= 1:
+        return text.rstrip("\r\n")
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
 class ComposerInput(Input):
-    """Open the native GIF picker when an empty composer receives ``g``."""
+    """Open the native GIF picker when an empty composer receives ``g``.
+
+    Also wires the composer to the system clipboard: Textual's ``Input`` only
+    keeps the first line of a paste and its ``ctrl+v`` pastes from Textual's
+    in-process clipboard, not from Wayland.
+    """
+
+    BINDINGS = [
+        Binding("ctrl+insert", "copy", "Copy selected text", show=False),
+        Binding("shift+insert", "paste", "Paste", show=False),
+    ]
 
     class GifRequested(TextualMessage):
         pass
+
+    _pending_paste = ""
+
+    def insert_pasted(self, text: str) -> None:
+        line = _single_line(text)
+        if not line:
+            return
+        start, end = self.selection
+        self.replace(line, start, end)
+
+    def paste_on_focus(self, text: str) -> None:
+        self._pending_paste += text
+
+    def _on_focus(self, event: events.Focus) -> None:
+        # Textual also runs Input._on_focus for this event (handlers are
+        # dispatched per class), so queue the insert until after it.
+        if self._pending_paste:
+            self.call_later(self._flush_pending_paste)
+
+    def _flush_pending_paste(self) -> None:
+        text, self._pending_paste = self._pending_paste, ""
+        self.cursor_position = len(self.value)
+        self.insert_pasted(text)
+
+    def _on_paste(self, event: events.Paste) -> None:
+        self.insert_pasted(event.text)
+        event.stop()
+
+    def action_paste(self) -> None:
+        self.insert_pasted(self.app.read_system_clipboard())
 
     def on_key(self, event: events.Key) -> None:
         if event.key == "g" and not self.value:
@@ -694,7 +743,11 @@ class MessagePanel(Vertical):
 
 
 class SelectableText(Static):
-    """Transcript text that copies the selected range on mouse release."""
+    """Transcript text selected with Textual's native mouse selection.
+
+    Textual highlights the selection and maps it through line wrapping; the app
+    copies it to the system clipboard on mouse release (``on_text_selected``).
+    """
 
     DEFAULT_CSS = """
     SelectableText {
@@ -708,35 +761,6 @@ class SelectableText(Static):
     def __init__(self, markup: str, text: str):
         super().__init__(markup, markup=True)
         self._text = text
-        self._anchor: tuple[int, int] | None = None
-
-    def on_mouse_down(self, event: events.MouseDown) -> None:
-        if event.button != 1:
-            return
-        self._anchor = (event.offset.y, event.offset.x)
-        self.app.capture_mouse(self)
-        event.stop()
-
-    def on_mouse_up(self, event: events.MouseUp) -> None:
-        if self._anchor is None:
-            return
-        end = (event.offset.y, event.offset.x)
-        self.app.capture_mouse(None)
-        start, finish = sorted((self._anchor, end))
-        lines = self._text.splitlines() or [self._text]
-        selected_lines = lines[start[0] : finish[0] + 1]
-        if selected_lines:
-            if start[0] == finish[0]:
-                selected_lines = [lines[start[0]][start[1] : finish[1]]]
-            else:
-                selected_lines[0] = selected_lines[0][start[1] :]
-                selected_lines[-1] = selected_lines[-1][: finish[1]]
-            selected = "\n".join(selected_lines).strip()
-            if selected:
-                self.app._last_copied_selection = selected
-                self.app._copy_to_clipboard(selected)
-        self._anchor = None
-        event.stop()
 
 
 class DialogItem(ListItem):
@@ -773,6 +797,9 @@ class TelegramTui(App[None]):
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
         Binding("escape", "focus_chats", "Chats", show=True),
         Binding("i", "show_info", "Info", show=False),
+        # Omarchy's SUPER+C sends ctrl+insert to terminals; Textual's own
+        # screen binding only covers ctrl+c/super+c.
+        Binding("ctrl+insert", "screen.copy_text", "Copy", show=False),
     ]
 
     def __init__(self, backend: TelegramBackend):
@@ -991,7 +1018,19 @@ class TelegramTui(App[None]):
         # change event a no-op; reload explicitly for keyboard cycling.
         self.run_worker(self._reload_dialogs, group="dialogs", exclusive=True, exit_on_error=False)
 
-    def _copy_to_clipboard(self, text: str) -> None:
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy to the Wayland clipboard; fall back to Textual's OSC 52 copy."""
+        if not self._copy_to_clipboard(text):
+            super().copy_to_clipboard(text)
+            return
+        self._clipboard = text
+        try:
+            self._set_status("Copied to clipboard")
+        except NoMatches:
+            # A modal screen is active; the status line lives on the main one.
+            self.notify("Copied to clipboard", timeout=2)
+
+    def _copy_to_clipboard(self, text: str) -> bool:
         try:
             copier = resolve_trusted_binary("wl-copy")
             if not copier:
@@ -1006,8 +1045,47 @@ class TelegramTui(App[None]):
             )
         except (OSError, subprocess.SubprocessError) as exc:
             logger.warning("clipboard copy failed: %s", exc)
+            return False
+        return True
+
+    def read_system_clipboard(self) -> str:
+        """Text from the Wayland clipboard, or Textual's in-process clipboard."""
+        try:
+            reader = resolve_trusted_binary("wl-paste")
+            if not reader:
+                raise OSError("wl-paste is not available")
+            result = subprocess.run(
+                [reader, "--no-newline", "--type", "text/plain"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=2,
+                env=safe_subprocess_env(),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("clipboard read failed: %s", exc)
+            return self.clipboard
+        return result.stdout
+
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        # Terminals bound to SUPER+C (Omarchy: ctrl+insert) copy their *own*
+        # selection and swallow the key, and they never get one while Textual
+        # owns the mouse. Copying on release makes select → SUPER+V work.
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+
+    def on_paste(self, event: events.Paste) -> None:
+        # Only reaches the app when the focused widget ignored it (e.g. the
+        # chat list, which has focus after connecting). Send it to the
+        # composer instead of dropping it.
+        if len(self.screen_stack) != 1 or not event.text:
             return
-        self._set_status("Copied to clipboard")
+        event.stop()
+        # Insert once focus lands: Input's select-on-focus would otherwise
+        # highlight the paste and the next keystroke would replace it.
+        self.query_one("#composer", ComposerInput).paste_on_focus(event.text)
+        self.action_compose()
 
     def action_show_info(self) -> None:
         self.push_screen(InfoScreen())

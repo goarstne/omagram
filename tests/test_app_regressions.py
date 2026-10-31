@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from textual.geometry import Offset
+from textual import events
 from textual.widgets import Input
 
 from telegram_tui.app import GifScreen, SelectableText, TelegramTui
@@ -34,23 +34,74 @@ def gif_backend():
 
 
 class AppRegressionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_single_line_selection_uses_original_line_for_both_bounds(self):
+    async def test_transcript_selection_is_copied_on_release(self):
         app = OfflineApp(backend())
-        async with app.run_test():
+        async with app.run_test() as pilot:
             selection = SelectableText("abcdef", "abcdef")
             await app.mount(selection)
-            selection._anchor = (0, 1)
-            event = SimpleNamespace(offset=Offset(4, 0), stop=Mock())
-            with patch.object(app, "_copy_to_clipboard") as copy:
-                selection.on_mouse_up(event)
-            copy.assert_called_once_with("bcd")
+            await pilot.pause()
+            selection.text_select_all()
+            with patch.object(app, "_copy_to_clipboard", return_value=True) as copy:
+                app.screen.post_message(events.TextSelected())
+                await pilot.pause()
+            copy.assert_called_once_with("abcdef")
+
+    async def test_super_v_with_chat_list_focused_pastes_into_composer(self):
+        app = OfflineApp(backend())
+        async with app.run_test() as pilot:
+            composer = app.query_one("#composer", Input)
+            composer.value = "draft"
+            app.query_one("#dialogs").focus()
+            await pilot.pause()
+            app.post_message(events.Paste(" + pasted"))
+            await pilot.pause()
+            self.assertIs(app.focused, composer)
+            self.assertEqual(composer.value, "draft + pasted")
+            # Nothing left highlighted for the next keystroke to overwrite.
+            self.assertTrue(composer.selection.is_empty)
+
+    async def test_multiline_paste_keeps_every_line(self):
+        app = OfflineApp(backend())
+        async with app.run_test() as pilot:
+            composer = app.query_one("#composer", Input)
+            composer.focus()
+            await pilot.pause()
+            app.post_message(events.Paste("\nfirst line\nsecond line\n"))
+            await pilot.pause()
+            self.assertEqual(composer.value, "first line second line")
+
+    async def test_ctrl_v_in_composer_reads_system_clipboard(self):
+        app = OfflineApp(backend())
+        async with app.run_test() as pilot:
+            app.query_one("#composer", Input).focus()
+            with patch.object(app, "read_system_clipboard", return_value="from wayland"):
+                await pilot.press("ctrl+v")
+            self.assertEqual(app.query_one("#composer", Input).value, "from wayland")
+
+    async def test_ctrl_insert_copies_composer_selection(self):
+        app = OfflineApp(backend())
+        async with app.run_test() as pilot:
+            composer = app.query_one("#composer", Input)
+            composer.focus()
+            composer.value = "draft text"
+            composer.select_all()
+            with patch.object(app, "_copy_to_clipboard", return_value=True) as copy:
+                await pilot.press("ctrl+insert")
+            copy.assert_called_once_with("draft text")
 
     def test_missing_clipboard_binary_is_handled(self):
         with patch("telegram_tui.app.resolve_trusted_binary", return_value=None), patch(
             "telegram_tui.app.subprocess.run"
         ) as run:
-            TelegramTui._copy_to_clipboard(SimpleNamespace(), "copied")
+            self.assertFalse(TelegramTui._copy_to_clipboard(SimpleNamespace(), "copied"))
         run.assert_not_called()
+
+    async def test_copy_falls_back_to_osc52_without_wl_copy(self):
+        app = OfflineApp(backend())
+        async with app.run_test():
+            with patch.object(app, "_copy_to_clipboard", return_value=False):
+                app.copy_to_clipboard("fallback")
+            self.assertEqual(app.clipboard, "fallback")
 
     def test_urls_keep_balanced_parentheses_but_strip_extra_closing_one(self):
         balanced = "https://example.com/wiki/Dog_(animal)"
